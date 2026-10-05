@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Неоценка Updater",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Фоновое обновление объявлений Avito и CIAN",
   "permissions": [
     "tabs",
@@ -10,8 +10,8 @@
     "storage"
   ],
   "host_permissions": [
-    "https://www.avito.ru/*",
-    "https://www.cian.ru/*",
+    "https://*.avito.ru/*",
+    "https://*.cian.ru/*",
     "https://54.neocenka.ru/*"
   ],
   "background": {
