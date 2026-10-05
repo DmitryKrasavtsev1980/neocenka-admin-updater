@@ -50,16 +50,39 @@ function parseCianDetailPage() {
     result.updatedDateText = dateEl.textContent?.trim() || null;
   }
 
-  // История цены из DOM
+  // История цены: основной источник — priceChanges в инлайновом JSON страницы.
+  // Он доступен и без авторизации. Старый селектор DOM (tr[class*="history-event"])
+  // в текущей вёрстке ЦИАН уже не встречается — оставлен как запасной вариант.
   const priceHistory: any[] = [];
-  const historyRows = document.querySelectorAll('tr[class*="history-event"]');
-  for (const row of Array.from(historyRows)) {
-    const cells = row.querySelectorAll('td');
-    if (cells.length >= 2) {
-      const dateText = cells[0].textContent?.trim() || '';
-      const priceText = cells[1].textContent?.replace(/[^\d]/g, '') || '';
-      if (dateText && priceText) {
-        priceHistory.push({ date: dateText, price: parseInt(priceText, 10) });
+  for (const s of Array.from(document.querySelectorAll('script'))) {
+    const text = s.textContent || '';
+    const m = text.match(/"priceChanges":(\[.*?\])/);
+    if (m) {
+      try {
+        const changes = JSON.parse(m[1]);
+        for (const c of changes) {
+          const price = c?.priceData?.price;
+          if (price && c?.changeTime) {
+            priceHistory.push({ date: c.changeTime, price: Number(price) });
+          }
+        }
+      } catch {
+        /* битый JSON — пробуем DOM */
+      }
+      break;
+    }
+  }
+
+  if (priceHistory.length === 0) {
+    const historyRows = document.querySelectorAll('tr[class*="history-event"]');
+    for (const row of Array.from(historyRows)) {
+      const cells = row.querySelectorAll('td');
+      if (cells.length >= 2) {
+        const dateText = cells[0].textContent?.trim() || '';
+        const priceText = cells[1].textContent?.replace(/[^\d]/g, '') || '';
+        if (dateText && priceText) {
+          priceHistory.push({ date: dateText, price: parseInt(priceText, 10) });
+        }
       }
     }
   }
