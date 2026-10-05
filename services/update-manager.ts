@@ -21,7 +21,7 @@ import type {
   SourceDomain,
 } from '../types';
 import { apiClient } from './api-client';
-import { sleep, retry } from '../utils/delays';
+import { sleep, keepAliveSleep, retry } from '../utils/delays';
 import { createBackgroundTab, closeTab, waitForTabLoad, navigateTab } from '../utils/tab-manager';
 import { parseAvitoAd } from '../parsers/avito-parse';
 import { parseCianAd } from '../parsers/cian-parse';
@@ -165,7 +165,7 @@ export class UpdateManager {
         }
         if (!this.shouldStop) {
           await this.ensureQueue();
-          await sleep(this.settings.pollIntervalSec * 1000);
+          await keepAliveSleep(this.settings.pollIntervalSec * 1000);
         }
       }
     } catch (err) {
@@ -228,7 +228,7 @@ export class UpdateManager {
 
       this.reportProgress();
       await this.sendHeartbeat([...inFlight]);
-      await sleep(this.settings.checkDelayMs);
+      await keepAliveSleep(this.settings.checkDelayMs);
     }
 
     await this.sendHeartbeat();
@@ -291,7 +291,7 @@ export class UpdateManager {
     if (!this.tabId) return null;
 
     await navigateTab(this.tabId, ad.url);
-    await sleep(this.settings.parseDelayMs);
+    await keepAliveSleep(this.settings.parseDelayMs);
 
     const parseFn = this.settings.source === 'avito' ? parseAvitoAd : parseCianAd;
     const parseResult = await retry(() => parseFn(this.tabId!), 3, 3000);
