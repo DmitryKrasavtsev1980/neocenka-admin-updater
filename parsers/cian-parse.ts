@@ -135,12 +135,23 @@ export async function parseCianAd(tabId: number): Promise<ParseResult> {
       return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'no_data' };
     }
 
-    // Обработка ошибок
-    const bodyText = await injectScript(tabId, () => document.body?.innerText?.substring(0, 500) || '');
-    if (bodyText?.includes('капч') || bodyText?.includes('captcha')) {
+    // Обработка ошибок. Читаем и title, и текст через injectScript:
+    // здесь код работает в service worker, где нет document.
+    const probe = await injectScript(tabId, () => ({
+      title: document.title || '',
+      text: document.body?.innerText?.substring(0, 500) || '',
+    }));
+    const bodyText = probe?.text || '';
+    const title = probe?.title || '';
+
+    if (bodyText.includes('капч') || bodyText.includes('captcha')) {
       return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'captcha' };
     }
-    if (bodyText?.includes('не найдено') || document.title.includes('404')) {
+    // WAF ЦИАНа (cian_waf_block) — «Обнаружен подозрительный трафик»
+    if (bodyText.includes('подозрительный трафик') || bodyText.includes('cian_waf_block') || title === 'Ошибка - Циан') {
+      return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'waf_block' };
+    }
+    if (bodyText.includes('не найдено') || title.includes('404')) {
       return { status: 'archived', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null };
     }
 

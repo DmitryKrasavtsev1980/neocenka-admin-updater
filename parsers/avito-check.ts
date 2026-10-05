@@ -11,7 +11,8 @@ import type { CheckResult } from '../types';
  */
 export async function checkAvitoAdHtml(url: string): Promise<CheckResult> {
   try {
-    const response = await fetch(url, { credentials: 'include' });
+    const target = url.replace(/^http:\/\//i, 'https://');
+    const response = await fetch(target, { credentials: 'include' });
 
     // 404/410 — сразу archived
     if (response.status === 404 || response.status === 410) {

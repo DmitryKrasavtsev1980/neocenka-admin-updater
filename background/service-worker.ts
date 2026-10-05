@@ -14,10 +14,10 @@ async function loadSettings(): Promise<Settings> {
     // дефолты — потом докладываем сохранённые, чтобы новые поля не терялись
     apiUrl: DEFAULT_API_URL,
     source: 'avito',
-    pollIntervalSec: 60,
-    batchSize: 50,
-    checkDelayMs: 2000,
-    parseDelayMs: 3000,
+    pollIntervalSec: 120,
+    batchSize: 15,
+    checkDelayMs: 12000,
+    parseDelayMs: 18000,
     autoEnqueue: true,
     ...(stored.settings || {}),
   };

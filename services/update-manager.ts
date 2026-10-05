@@ -33,10 +33,10 @@ export const DEFAULT_API_URL = 'https://54.neocenka.ru/api';
 const DEFAULT_SETTINGS: Settings = {
   apiUrl: DEFAULT_API_URL,
   source: 'avito',
-  pollIntervalSec: 60,
-  batchSize: 50,
-  checkDelayMs: 2000,
-  parseDelayMs: 3000,
+  pollIntervalSec: 120,
+  batchSize: 15,
+  checkDelayMs: 12000,
+  parseDelayMs: 18000,
   autoEnqueue: true,
 };
 
@@ -125,6 +125,9 @@ export class UpdateManager {
   private matched = 0;
   private errors = 0;
   private onUpdate: ((stats: { processed: number; matched: number; errors: number }) => void) | null = null;
+  /** До какого момента паузимся из-за WAF/капчи (epoch ms) */
+  private cooldownUntil = 0;
+  private consecutiveWaf = 0;
 
   constructor(settings: Partial<Settings> = {}) {
     this.settings = { ...DEFAULT_SETTINGS, ...settings };
@@ -158,14 +161,18 @@ export class UpdateManager {
       console.log(`[Updater] Started as ${this.browserId}, source=${this.settings.source}, tab ${this.tabId}`);
 
       while (!this.shouldStop) {
+        await this.waitCooldown();
+        if (this.shouldStop) break;
+
         const claimed = await this.processBatch();
-        if (!this.shouldStop && claimed > 0) {
-          // очередь ещё не пуста — берём следующую порцию без паузы
+        if (!this.shouldStop && claimed > 0 && Date.now() >= this.cooldownUntil) {
+          // очередь ещё не пуста — берём следующую порцию
+          await keepAliveSleep(this.jitter(this.settings.parseDelayMs));
           continue;
         }
-        if (!this.shouldStop) {
+        if (!this.shouldStop && Date.now() >= this.cooldownUntil) {
           await this.ensureQueue();
-          await keepAliveSleep(this.settings.pollIntervalSec * 1000);
+          await keepAliveSleep(this.jitter(this.settings.pollIntervalSec * 1000));
         }
       }
     } catch (err) {
@@ -182,6 +189,19 @@ export class UpdateManager {
 
   stop() {
     this.shouldStop = true;
+  }
+
+  /** ±25% джиттер, чтобы паузы не выглядели машинно-равномерными */
+  private jitter(ms: number): number {
+    return Math.round(ms * (0.75 + Math.random() * 0.5));
+  }
+
+  /** Ждать, пока истечёт WAF-кулдаун (прерываемо через shouldStop) */
+  private async waitCooldown() {
+    while (!this.shouldStop && Date.now() < this.cooldownUntil) {
+      const left = this.cooldownUntil - Date.now();
+      await keepAliveSleep(Math.min(left, 30_000));
+    }
   }
 
   /**
@@ -222,13 +242,27 @@ export class UpdateManager {
         await apiClient.release(ad.queue_id, this.browserId, msg).catch(() => {});
         this.errors++;
         this.processed++;
+
+        // WAF/капча площадки — не долбим дальше, а уходим в длинный откат.
+        if (msg === 'waf_block' || msg === 'captcha') {
+          this.consecutiveWaf++;
+          const backoffMin = Math.min(30, 5 * this.consecutiveWaf);
+          this.cooldownUntil = Date.now() + backoffMin * 60_000;
+          console.warn(`[Updater] ${msg} detected — pausing ${backoffMin} min (strike ${this.consecutiveWaf})`);
+          // остальные строки батча отпускаем, не трогая площадку
+          for (const rest of inFlight) {
+            await apiClient.release(rest, this.browserId, `paused: ${msg}`).catch(() => {});
+          }
+          inFlight.clear();
+          break;
+        }
       } finally {
         inFlight.delete(ad.queue_id);
       }
 
       this.reportProgress();
       await this.sendHeartbeat([...inFlight]);
-      await keepAliveSleep(this.settings.checkDelayMs);
+      await keepAliveSleep(this.jitter(this.settings.checkDelayMs));
     }
 
     await this.sendHeartbeat();

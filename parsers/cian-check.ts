@@ -6,10 +6,16 @@ import type { CheckResult } from '../types';
 
 export async function checkCianAdHtml(url: string): Promise<CheckResult> {
   try {
-    const response = await fetch(url, { credentials: 'include' });
+    // URL в БД бывает http:// — host_permissions даём на https://,
+    // поэтому схему нормализуем, иначе fetch падает с CORS.
+    const target = url.replace(/^http:\/\//i, 'https://');
+    const response = await fetch(target, { credentials: 'include' });
 
     if (response.status === 404 || response.status === 410) {
       return { status: 'archived', price: null, priceChanged: false, statusChanged: true };
+    }
+    if (response.status === 429 || response.status === 403) {
+      return { status: 'error', price: null, priceChanged: false, statusChanged: false, error: 'waf_block' };
     }
 
     // Редирект — проверяем ID
@@ -22,6 +28,11 @@ export async function checkCianAdHtml(url: string): Promise<CheckResult> {
     }
 
     const html = await response.text();
+
+    // WAF ЦИАНа — страница «Обнаружен подозрительный трафик» / cian_waf_block
+    if (html.includes('cian_waf_block') || html.includes('подозрительный трафик')) {
+      return { status: 'error', price: null, priceChanged: false, statusChanged: false, error: 'waf_block' };
+    }
 
     // Проверка на снятое объявление
     if (html.includes('OfferUnpublished') || html.includes('снято с публикации')) {
