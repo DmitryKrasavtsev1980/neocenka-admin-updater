@@ -41,6 +41,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const settings = await loadSettings();
         if (message.source) settings.source = message.source;
 
+        // Запомнить, что воркер должен жить: по этому флагу будильник
+        // поднимает его после гибели service worker'а.
+        await chrome.storage.local.set({ autoStart: true });
+
         manager = new UpdateManager(settings);
         manager.onProgress((stats) => {
           // Обновляем badge
@@ -62,6 +66,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       case 'STOP': {
         manager?.stop();
+        await chrome.storage.local.set({ autoStart: false });
         return { stopped: true };
       }
 
@@ -101,10 +106,16 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       // Автозапуск если включено
       const stored = await chrome.storage.local.get('autoStart');
       if (stored.autoStart) {
-        chrome.runtime.sendMessage({ type: 'START', source: settings.source });
+        chrome.runtime.sendMessage({ type: 'START', source: settings.source }).catch(() => {});
       }
     }
   }
 });
+
+// MV3 убивает service worker при простое (~30 с), а вместе с ним умирает
+// и in-memory UpdateManager — воркер молча останавливался. Будим SW по
+// будильнику и по нему же перезапускаем воркер, если autoStart включён.
+// Минимальный период alarms — 1 минута.
+chrome.alarms.create('periodic-check', { periodInMinutes: 1 });
 
 console.log('[Updater] Service worker loaded');
