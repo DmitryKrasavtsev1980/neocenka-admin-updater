@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Неоценка Updater</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>🔄 Неоценка Updater</h1>
+
+    <div class="status-bar" id="statusBar">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">Остановлен</span>
+    </div>
+
+    <div class="stats" id="stats">
+      <div class="stat">
+        <span class="stat-value" id="processed">0</span>
+        <span class="stat-label">Обработано</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value" id="matched">0</span>
+        <span class="stat-label">Обновлено</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value" id="errors">0</span>
+        <span class="stat-label">Ошибки</span>
+      </div>
+    </div>
+
+    <div class="settings">
+      <label>
+        Источник:
+        <select id="source">
+          <option value="avito">Avito</option>
+          <option value="cian">CIAN</option>
+        </select>
+      </label>
+
+      <label>
+        Интервал опроса (сек):
+        <input type="number" id="pollInterval" value="60" min="10" max="300">
+      </label>
+
+      <label>
+        Размер батча:
+        <input type="number" id="batchSize" value="50" min="1" max="100">
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" id="autoEnqueue" checked>
+        Создавать задачу, если очередь пуста
+      </label>
+    </div>
+
+    <div class="buttons">
+      <button id="startBtn" class="btn btn-primary">▶ Запустить</button>
+      <button id="stopBtn" class="btn btn-danger" disabled>⏹ Остановить</button>
+    </div>
+
+    <div class="log" id="log"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

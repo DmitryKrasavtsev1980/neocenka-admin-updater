@@ -1,0 +1,15 @@
+{
+  "name": "admin-updater",
+  "version": "1.0.0",
+  "description": "Chrome extension для обновления объявлений с сервера",
+  "scripts": {
+    "build": "tsc && vite build",
+    "dev": "tsc && vite build --watch"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.260",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12",
+    "vite-plugin-static-copy": "^1.0.1"
+  }
+}
