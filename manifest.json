@@ -14,7 +14,9 @@
     "http://*.avito.ru/*",
     "https://*.cian.ru/*",
     "http://*.cian.ru/*",
-    "https://54.neocenka.ru/*"
+    "https://54.neocenka.ru/*",
+    "http://192.168.8.1/*",
+    "https://api.ipify.org/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js"

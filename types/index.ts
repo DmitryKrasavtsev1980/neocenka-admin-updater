@@ -121,9 +121,31 @@ export interface Settings {
   parseDelayMs: number;
   /** Задавать задачу «обновить всё», если очередь пуста */
   autoEnqueue: boolean;
+  /** Адрес веб-интерфейса модема для смены IP при бане */
+  modemHost: string;
+  /** Сменять IP через модем, когда площадка банит */
+  modemEnabled: boolean;
+  /** 'dataswitch' — перевыпуск соединения (~30 с), 'reboot' — перезагрузка модема (~90 с) */
+  modemMethod: 'dataswitch' | 'reboot';
 }
 
 /** Устойчивый id этого воркера — для аренды строк в update_queue */
 export interface WorkerIdentity {
   browserId: string;
+}
+
+/**
+ * Глобальный лок на смену IP (app_locks, ключ 'ip_rotate').
+ * Модем один, внешний адрес один на всех воркеров — крутить его может только
+ * кто-то один, остальные в это время простаивают.
+ */
+export interface IpLockState {
+  name: string;
+  holder: string | null;
+  expires_at: string | null;
+  /** Держит ли кто-нибудь лок прямо сейчас (и не протух ли он) */
+  held: boolean;
+  /** Наш ли это лок (в ответе acquire при успехе) */
+  held_by_me?: boolean;
+  ttl_seconds: number;
 }

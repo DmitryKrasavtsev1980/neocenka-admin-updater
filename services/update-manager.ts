@@ -27,6 +27,7 @@ import { parseAvitoAd } from '../parsers/avito-parse';
 import { parseCianAd } from '../parsers/cian-parse';
 import { checkAvitoAdHtml } from '../parsers/avito-check';
 import { checkCianAdHtml } from '../parsers/cian-check';
+import { ModemClient, DEFAULT_MODEM_SETTINGS, type ModemSettings } from './modem-client';
 
 export const DEFAULT_API_URL = 'https://54.neocenka.ru/api';
 
@@ -38,6 +39,9 @@ const DEFAULT_SETTINGS: Settings = {
   checkDelayMs: 12000,
   parseDelayMs: 18000,
   autoEnqueue: true,
+  modemHost: DEFAULT_MODEM_SETTINGS.host,
+  modemEnabled: true,
+  modemMethod: 'dataswitch',
 };
 
 const SOURCE_DOMAIN: Record<Settings['source'], SourceDomain> = {
@@ -128,9 +132,15 @@ export class UpdateManager {
   /** До какого момента паузимся из-за WAF/капчи (epoch ms) */
   private cooldownUntil = 0;
   private consecutiveWaf = 0;
+  private modemSettings: ModemSettings = DEFAULT_MODEM_SETTINGS;
 
   constructor(settings: Partial<Settings> = {}) {
     this.settings = { ...DEFAULT_SETTINGS, ...settings };
+    this.modemSettings = {
+      host: this.settings.modemHost,
+      enabled: this.settings.modemEnabled,
+      method: this.settings.modemMethod,
+    };
   }
 
   onProgress(callback: (stats: { processed: number; matched: number; errors: number }) => void) {
@@ -243,17 +253,35 @@ export class UpdateManager {
         this.errors++;
         this.processed++;
 
-        // WAF/капча площадки — не долбим дальше, а уходим в длинный откат.
+        // WAF/капча площадки — не долбим дальше: меняем IP и/или уходим в откат.
         if (msg === 'waf_block' || msg === 'captcha') {
           this.consecutiveWaf++;
-          const backoffMin = Math.min(30, 5 * this.consecutiveWaf);
-          this.cooldownUntil = Date.now() + backoffMin * 60_000;
-          console.warn(`[Updater] ${msg} detected — pausing ${backoffMin} min (strike ${this.consecutiveWaf})`);
           // остальные строки батча отпускаем, не трогая площадку
           for (const rest of inFlight) {
             await apiClient.release(rest, this.browserId, `paused: ${msg}`).catch(() => {});
           }
           inFlight.clear();
+
+          // Смена IP — только под глобальным локом: модем один на всех, без
+          // лока сосед второй раз рвёт соединение и сжигает попытки строк.
+          let outcome: 'rotated' | 'busy' | 'failed' = 'failed';
+          if (this.modemSettings.enabled) {
+            outcome = await this.rotateIpWithLock();
+          }
+
+          // После смены IP (или пока его крутит сосед) — короткая пауза:
+          // адрес свежий, можно работать. Без смены — растущий откат.
+          const backoffMin = outcome === 'failed' ? Math.min(30, 5 * this.consecutiveWaf) : 1;
+          this.cooldownUntil = Date.now() + backoffMin * 60_000;
+          console.warn(
+            `[Updater] ${msg} — strike ${this.consecutiveWaf}, ` +
+            (outcome === 'rotated'
+              ? 'IP rotated, resuming shortly'
+              : outcome === 'busy'
+                ? 'IP rotation busy (neighbor holds lock), resuming shortly'
+                : `pausing ${backoffMin} min`)
+          );
+          if (outcome !== 'failed') this.consecutiveWaf = 0;
           break;
         }
       } finally {
@@ -267,6 +295,43 @@ export class UpdateManager {
 
     await this.sendHeartbeat();
     return ads.length;
+  }
+
+  /**
+   * Смена IP под глобальным локом.
+   *
+   * Модем один, внешний адрес один на всех воркеров: пока один крутит IP,
+   * у остальных обрываются запросы и сгорают попытки строк. Поэтому крутит
+   * тот, кто первый взял лок, а остальные в это время простаивают.
+   *
+   * - 'rotated' — мы сменили IP, можно сразу работать дальше;
+   * - 'busy'    — лок держит сосед, он уже крутит — просто отходим;
+   * - 'failed'  — лок не взялся / модем не ответил, нужен откат.
+   */
+  private async rotateIpWithLock(): Promise<'rotated' | 'busy' | 'failed'> {
+    let acquired = false;
+    try {
+      acquired = await apiClient.acquireIpLock(this.browserId);
+    } catch (err) {
+      console.warn('[Updater] IP lock acquire failed:', err);
+      return 'failed';
+    }
+
+    if (!acquired) {
+      return 'busy';
+    }
+
+    try {
+      const r = await new ModemClient(this.modemSettings).rotateIp();
+      if (!r.ok) {
+        console.warn(`[Updater] IP rotate failed: ${r.error}`);
+        return 'failed';
+      }
+      return 'rotated';
+    } finally {
+      // Отпускаем всегда: упавший воркер не должен держать лок до TTL (180 с).
+      await apiClient.releaseIpLock(this.browserId).catch(() => {});
+    }
   }
 
   /**

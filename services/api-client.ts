@@ -9,6 +9,7 @@
 import type {
   ClaimedAd,
   AdUpdateData,
+  IpLockState,
   QueueStats,
   SourceDomain,
   UpdateTaskDto,
@@ -148,6 +149,39 @@ class ApiClient {
   /** Сводка по очереди: счётчики, кто держит аренды, протухшие */
   async getQueueStats(): Promise<QueueStats> {
     const data = await this.request<{ data: QueueStats }>('/update/queue-stats');
+    return data.data;
+  }
+
+  // ─── Глобальный лок на смену IP ───────────────────────────
+  //
+  // Модем один на всех воркеров: пока один крутит IP, у остальных обрываются
+  // запросы и сгорают попытки строк. Поэтому крутит тот, кто первый взял лок.
+
+  /**
+   * Попытаться взять лок на смену IP.
+   * true — лок наш (или протух и перехвачен), false — его держит сосед.
+   */
+  async acquireIpLock(browserId: string): Promise<boolean> {
+    const data = await this.request<{ acquired: boolean }>('/update/ip-lock/acquire', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ browser_id: browserId }),
+    });
+    return data.acquired === true;
+  }
+
+  /** Отпустить лок. Чужой лок сервер не трогает — безопасно звать всегда. */
+  async releaseIpLock(browserId: string): Promise<void> {
+    await this.request('/update/ip-lock/release', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ browser_id: browserId }),
+    });
+  }
+
+  /** Кто сейчас держит лок и сколько ему осталось */
+  async getIpLock(): Promise<IpLockState> {
+    const data = await this.request<{ data: IpLockState }>('/update/ip-lock');
     return data.data;
   }
 

@@ -19,6 +19,9 @@ async function loadSettings(): Promise<Settings> {
     checkDelayMs: 12000,
     parseDelayMs: 18000,
     autoEnqueue: true,
+    modemHost: 'http://192.168.8.1',
+    modemEnabled: true,
+    modemMethod: 'dataswitch',
     ...(stored.settings || {}),
   };
 }
