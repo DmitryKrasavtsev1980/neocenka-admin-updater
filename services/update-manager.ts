@@ -341,6 +341,10 @@ export class UpdateManager {
 
     if (ads.length === 0) {
       console.log('[Updater] Queue empty');
+      // Пульс нужен и на пустой очереди: без него воркер не подтянет
+      // remote-конфиг (autoEnqueue / source) и будет жить со старыми
+      // настройками до следующего обработанного объявления.
+      await this.sendHeartbeat();
       return 0;
     }
 
@@ -468,7 +472,12 @@ export class UpdateManager {
   }
 
   /**
-   * Очередь закончилась — при autoEnqueue просим сервер сложить туда всё заново.
+   * Очередь закончилась — при autoEnqueue просим сервер досыпать устаревшее.
+   *
+   * Сервер берёт только объявления внутри областей «В работе» (in_progress):
+   * если таких областей нет, ads_found = 0 и задача не создаётся. Раньше
+   * update_all сваливал ВСЕ объявления — на 123k карточках это была просто
+   * свалка в очередь, не привязанная к конвейеру областей.
    */
   private async ensureQueue() {
     if (!this.settings.autoEnqueue || this.shouldStop) return;
@@ -476,8 +485,12 @@ export class UpdateManager {
       const result = await apiClient.createTask({
         name: `Авто-обновление ${this.settings.source}`,
         source: SOURCE_DOMAIN[this.settings.source],
-        filter_data: { update_all: true },
+        filter_data: { update_all: true, mode: 'stale', stale_days: 3 },
       });
+      if (!result?.task || !result.ads_found) {
+        console.log('[Updater] Досыпать нечего (нет областей «В работе» или очередь актуальна)');
+        return;
+      }
       console.log(`[Updater] Enqueued task #${result.task.id}, ads: ${result.ads_found}`);
     } catch (err) {
       console.warn('[Updater] Enqueue failed:', err);
