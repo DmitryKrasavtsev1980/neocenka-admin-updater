@@ -213,6 +213,10 @@ export class UpdateManager {
         throw new Error('API server is not available');
       }
 
+      // Сначала heartbeat — сервер назначает источник (разводит браузеры
+      // по площадкам). Иначе оба успеют урвать Авито до первого ответа.
+      await this.sendHeartbeat();
+
       const baseUrl = this.settings.source === 'avito' ? 'https://www.avito.ru/' : 'https://www.cian.ru/';
       this.tabId = await createBackgroundTab(baseUrl);
       await waitForTabLoad(this.tabId, 15000);
