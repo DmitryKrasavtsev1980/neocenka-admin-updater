@@ -1,5 +1,6 @@
 /**
- * Popup script для расширения обновления
+ * Popup — статус воркера + старт/стоп.
+ * Настройки приходят с сервера (heartbeat → config), здесь только просмотр.
  */
 
 const startBtn = document.getElementById('startBtn') as HTMLButtonElement;
@@ -9,11 +10,13 @@ const statusText = document.getElementById('statusText')!;
 const processedEl = document.getElementById('processed')!;
 const matchedEl = document.getElementById('matched')!;
 const errorsEl = document.getElementById('errors')!;
-const sourceSelect = document.getElementById('source') as HTMLSelectElement;
-const pollIntervalInput = document.getElementById('pollInterval') as HTMLInputElement;
-const batchSizeInput = document.getElementById('batchSize') as HTMLInputElement;
-const autoEnqueueInput = document.getElementById('autoEnqueue') as HTMLInputElement;
 const logEl = document.getElementById('log')!;
+
+// Элементы конфига
+const cfgSource = document.getElementById('cfgSource')!;
+const cfgBatch = document.getElementById('cfgBatch')!;
+const cfgPoll = document.getElementById('cfgPoll')!;
+const cfgAuto = document.getElementById('cfgAuto')!;
 
 function addLog(message: string, type: 'info' | 'error' | 'success' = 'info') {
   const entry = document.createElement('div');
@@ -33,14 +36,17 @@ function updateUI(stats: { isRunning: boolean; processed: number; matched: numbe
   stopBtn.disabled = !stats.isRunning;
 }
 
-// Загрузка настроек
+function updateConfigInfo(settings: any) {
+  if (!settings) return;
+  cfgSource.textContent = settings.source === 'cian' ? 'CIAN' : 'Avito';
+  cfgBatch.textContent = String(settings.batchSize ?? '—');
+  cfgPoll.textContent = `${settings.pollIntervalSec ?? '—'} с`;
+  cfgAuto.textContent = settings.autoEnqueue ? 'да' : 'нет';
+}
+
+// Загрузка настроек (просмотр)
 chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (settings) => {
-  if (settings) {
-    sourceSelect.value = settings.source || 'avito';
-    pollIntervalInput.value = String(settings.pollIntervalSec || 60);
-    batchSizeInput.value = String(settings.batchSize || 50);
-    autoEnqueueInput.checked = settings.autoEnqueue !== false;
-  }
+  updateConfigInfo(settings);
 });
 
 // Проверка статуса при открытии
@@ -48,20 +54,10 @@ chrome.runtime.sendMessage({ type: 'STATUS' }, (stats) => {
   if (stats) updateUI(stats);
 });
 
-// Запуск
+// Запуск — настройки уже на сервере, просто стартуем
 startBtn.addEventListener('click', () => {
-  const batch = Math.min(100, Math.max(1, parseInt(batchSizeInput.value) || 50));
-  batchSizeInput.value = String(batch);
-
-  const settings = {
-    source: sourceSelect.value as 'avito' | 'cian',
-    pollIntervalSec: Math.min(300, Math.max(10, parseInt(pollIntervalInput.value) || 60)),
-    batchSize: batch,
-    autoEnqueue: autoEnqueueInput.checked,
-  };
-
-  chrome.runtime.sendMessage({ type: 'SAVE_SETTINGS', settings }, () => {
-    chrome.runtime.sendMessage({ type: 'START', source: settings.source }, (result) => {
+  chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (settings) => {
+    chrome.runtime.sendMessage({ type: 'START', source: settings?.source || 'avito' }, (result) => {
       if (result?.error) {
         addLog(`Ошибка: ${result.error}`, 'error');
       } else {

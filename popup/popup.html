@@ -30,30 +30,13 @@
       </div>
     </div>
 
-    <div class="settings">
-      <label>
-        Источник:
-        <select id="source">
-          <option value="avito">Avito</option>
-          <option value="cian">CIAN</option>
-        </select>
-      </label>
-
-      <label>
-        Интервал опроса (сек):
-        <input type="number" id="pollInterval" value="60" min="10" max="300">
-      </label>
-
-      <label>
-        Размер батча:
-        <input type="number" id="batchSize" value="50" min="1" max="100">
-      </label>
-
-      <label class="checkbox">
-        <input type="checkbox" id="autoEnqueue" checked>
-        Создавать задачу, если очередь пуста
-      </label>
+    <div class="config-info" id="configInfo">
+      <div class="config-row"><span class="config-label">Источник</span><span id="cfgSource">—</span></div>
+      <div class="config-row"><span class="config-label">Батч</span><span id="cfgBatch">—</span></div>
+      <div class="config-row"><span class="config-label">Опрос</span><span id="cfgPoll">—</span></div>
+      <div class="config-row"><span class="config-label">Автоочередь</span><span id="cfgAuto">—</span></div>
     </div>
+    <div class="config-hint">Настройки приходят с сервера</div>
 
     <div class="buttons">
       <button id="startBtn" class="btn btn-primary">▶ Запустить</button>
