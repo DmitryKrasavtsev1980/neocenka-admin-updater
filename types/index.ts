@@ -119,6 +119,8 @@ export interface Settings {
   batchSize: number;
   checkDelayMs: number;
   parseDelayMs: number;
+  /** Сколько карточек в сутки можно обработать по этому IP (см. SOURCE_TEMPO) */
+  dailyCap: number;
   /** Задавать задачу «обновить всё», если очередь пуста */
   autoEnqueue: boolean;
   /** Адрес веб-интерфейса модема для смены IP при бане */

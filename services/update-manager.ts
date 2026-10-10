@@ -35,14 +35,50 @@ const DEFAULT_SETTINGS: Settings = {
   apiUrl: DEFAULT_API_URL,
   source: 'avito',
   pollIntervalSec: 120,
-  batchSize: 15,
-  checkDelayMs: 12000,
-  parseDelayMs: 18000,
+  batchSize: 10,
+  checkDelayMs: 55000,
+  parseDelayMs: 50000,
+  dailyCap: 1200,
   autoEnqueue: true,
   modemHost: DEFAULT_MODEM_SETTINGS.host,
   modemEnabled: true,
   modemMethod: 'dataswitch',
 };
+
+/**
+ * Согласованный темп по площадкам (neocenka-extension#8, 2026-10-04).
+ *
+ * Ограничение — на IP, не на число воркеров, поэтому темп задан жёстко и
+ * НЕ читается из настроек: раньше в дефолтах стояло 12 с / 18 с, и ЦИАН
+ * банил IP за полчаса. Дельта ±25% от `jitter()` — попадаем в
+ * ЦИАН 41–69 с (цель 45–60 с), Авито 26–44 с (цель 30–40 с).
+ */
+export const SOURCE_TEMPO = {
+  avito: { checkDelayMs: 35_000, parseDelayMs: 35_000, dailyCap: 2000 },
+  cian: { checkDelayMs: 55_000, parseDelayMs: 50_000, dailyCap: 1200 },
+} as const satisfies Record<string, { checkDelayMs: number; parseDelayMs: number; dailyCap: number }>;
+
+/** Дневной счётчик обработанных карточек — для `dailyCap` */
+const DAILY_KEY = 'dailyUsage';
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Сколько карточек сегодня уже обработано */
+export async function getDailyUsed(): Promise<{ date: string; count: number }> {
+  const stored = await chrome.storage.local.get(DAILY_KEY);
+  const usage = stored[DAILY_KEY] as { date: string; count: number } | undefined;
+  if (!usage || usage.date !== today()) return { date: today(), count: 0 };
+  return usage;
+}
+
+async function bumpDailyUsed(): Promise<number> {
+  const usage = await getDailyUsed();
+  const count = usage.count + 1;
+  await chrome.storage.local.set({ [DAILY_KEY]: { date: today(), count } });
+  return count;
+}
 
 const SOURCE_DOMAIN: Record<Settings['source'], SourceDomain> = {
   avito: 'avito.ru',
@@ -136,6 +172,12 @@ export class UpdateManager {
 
   constructor(settings: Partial<Settings> = {}) {
     this.settings = { ...DEFAULT_SETTINGS, ...settings };
+    // Темп — всегда из SOURCE_TEMPO, настройками не переопределяется:
+    // скорость — вопрос бана IP, а не удобства.
+    const tempo = SOURCE_TEMPO[this.settings.source] ?? SOURCE_TEMPO.avito;
+    this.settings.checkDelayMs = tempo.checkDelayMs;
+    this.settings.parseDelayMs = tempo.parseDelayMs;
+    this.settings.dailyCap = tempo.dailyCap;
     this.modemSettings = {
       host: this.settings.modemHost,
       enabled: this.settings.modemEnabled,
@@ -219,6 +261,19 @@ export class UpdateManager {
    * Возвращает число обработанных строк.
    */
   private async processBatch(): Promise<number> {
+    // Дневной кап: площадка банит по IP за объём за сутки, а не за скорость.
+    // Достигли — не берём даже claim, чтобы не держать строки в аренде,
+    // и не дёргаем ensureQueue (он бы завёл новую задачу впустую).
+    // Уходим в cooldownUntil до полуночи — его уже крутит waitCooldown().
+    const used = await getDailyUsed();
+    if (used.count >= this.settings.dailyCap) {
+      const midnight = new Date();
+      midnight.setHours(24, 0, 0, 0);
+      this.cooldownUntil = Math.max(this.cooldownUntil, midnight.getTime());
+      console.log(`[Updater] Daily cap reached (${used.count}/${this.settings.dailyCap}) — idle until ${midnight.toISOString()}`);
+      return 0;
+    }
+
     const source = SOURCE_DOMAIN[this.settings.source];
     const ads = await apiClient.claim(this.browserId, source, this.settings.batchSize);
 
@@ -246,12 +301,14 @@ export class UpdateManager {
         await apiClient.complete(ad.queue_id, this.browserId, update ?? {});
         if (update) this.matched++;
         this.processed++;
+        await bumpDailyUsed();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[Updater] Ad ${ad.id} (queue ${ad.queue_id}) failed:`, msg);
         await apiClient.release(ad.queue_id, this.browserId, msg).catch(() => {});
         this.errors++;
         this.processed++;
+        await bumpDailyUsed();
 
         // WAF/капча площадки — не долбим дальше: меняем IP и/или уходим в откат.
         if (msg === 'waf_block' || msg === 'captcha') {
@@ -436,7 +493,7 @@ export class UpdateManager {
 
   private async sendHeartbeat(queueIds: number[] = []) {
     try {
-      await apiClient.heartbeat(
+      const resp = await apiClient.heartbeat(
         this.browserId,
         SOURCE_DOMAIN[this.settings.source],
         {
@@ -446,8 +503,53 @@ export class UpdateManager {
         },
         queueIds
       );
+      // Сервер отдаёт конфиг — мержим в settings (темп НЕ трогаем, он залочен)
+      if (resp?.config) {
+        this.applyRemoteConfig(resp.config);
+      }
     } catch (err) {
       console.warn('[Updater] Heartbeat failed:', err);
+    }
+  }
+
+  /**
+   * Применить конфиг с сервера (storage/app/update_config.json).
+   * Темп парсинга (checkDelayMs / parseDelayMs / dailyCap) НЕ переопределяется —
+   * это защита от бана, всегда из SOURCE_TEMPO.
+   */
+  private applyRemoteConfig(config: Record<string, unknown>) {
+    const allowed = ['source', 'batchSize', 'pollIntervalSec', 'autoEnqueue'] as const;
+    let changed = false;
+    for (const key of allowed) {
+      if (config[key] !== undefined && (this.settings as any)[key] !== config[key]) {
+        (this.settings as any)[key] = config[key];
+        changed = true;
+      }
+    }
+    if (changed) {
+      // Перезаписываем задержки из SOURCE_TEMPO (страховка)
+      const tempo = SOURCE_TEMPO[this.settings.source] ?? SOURCE_TEMPO.avito;
+      this.settings.checkDelayMs = tempo.checkDelayMs;
+      this.settings.parseDelayMs = tempo.parseDelayMs;
+      this.settings.dailyCap = tempo.dailyCap;
+      // Сохраняем в chrome.storage — чтобы пережил перезапуск
+      chrome.storage.local.get('settings').then(({ settings: stored }) => {
+        chrome.storage.local.set({
+          settings: {
+            ...(stored || {}),
+            source: this.settings.source,
+            batchSize: this.settings.batchSize,
+            pollIntervalSec: this.settings.pollIntervalSec,
+            autoEnqueue: this.settings.autoEnqueue,
+          },
+        });
+      }).catch(() => {});
+      console.log('[Updater] Config updated from server:', {
+        source: this.settings.source,
+        batchSize: this.settings.batchSize,
+        pollIntervalSec: this.settings.pollIntervalSec,
+        autoEnqueue: this.settings.autoEnqueue,
+      });
     }
   }
 

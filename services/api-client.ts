@@ -133,7 +133,7 @@ class ApiClient {
     source: SourceDomain | null,
     stats: { processed: number; matched: number; errors: number },
     queueIds: number[] = []
-  ): Promise<{ success: boolean; extended: number }> {
+  ): Promise<{ success: boolean; extended: number; config?: Record<string, unknown> }> {
     return this.request('/update/heartbeat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

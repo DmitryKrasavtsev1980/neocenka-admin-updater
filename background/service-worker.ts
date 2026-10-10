@@ -15,9 +15,13 @@ async function loadSettings(): Promise<Settings> {
     apiUrl: DEFAULT_API_URL,
     source: 'avito',
     pollIntervalSec: 120,
-    batchSize: 15,
-    checkDelayMs: 12000,
-    parseDelayMs: 18000,
+    batchSize: 10,
+    // Задержки и дневной кап ниже — только для отображения: UpdateManager
+    // всё равно перетирает их из SOURCE_TEMPO, чтобы темп нельзя было
+    // разогнать сохранёнными настройками (см. neocenka-extension#8).
+    checkDelayMs: 55000,
+    parseDelayMs: 50000,
+    dailyCap: 1200,
     autoEnqueue: true,
     modemHost: 'http://192.168.8.1',
     modemEnabled: true,
