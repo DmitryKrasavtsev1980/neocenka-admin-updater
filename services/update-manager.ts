@@ -168,6 +168,12 @@ export class UpdateManager {
   /** До какого момента паузимся из-за WAF/капчи (epoch ms) */
   private cooldownUntil = 0;
   private consecutiveWaf = 0;
+  /**
+   * Множитель темпа. 1.0 — штатный SOURCE_TEMPO; после бана растёт ×1.5
+   * (макс. 3.0) и держится, пока площадка не отдохнула 30 минут без WAF.
+   */
+  private tempoMultiplier = 1.0;
+  private lastWafAt = 0;
   private modemSettings: ModemSettings = DEFAULT_MODEM_SETTINGS;
 
   constructor(settings: Partial<Settings> = {}) {
@@ -200,6 +206,7 @@ export class UpdateManager {
     try {
       apiClient.setBaseUrl(this.settings.apiUrl);
       this.browserId = await getBrowserId();
+      await this.loadTempo();
 
       const healthy = await apiClient.healthCheck();
       if (!healthy) {
@@ -219,7 +226,7 @@ export class UpdateManager {
         const claimed = await this.processBatch();
         if (!this.shouldStop && claimed > 0 && Date.now() >= this.cooldownUntil) {
           // очередь ещё не пуста — берём следующую порцию
-          await keepAliveSleep(this.jitter(this.settings.parseDelayMs));
+          await this.tempoSleep(this.settings.parseDelayMs);
           continue;
         }
         if (!this.shouldStop && Date.now() >= this.cooldownUntil) {
@@ -248,6 +255,48 @@ export class UpdateManager {
     return Math.round(ms * (0.75 + Math.random() * 0.5));
   }
 
+  /**
+   * Пауза между запросами к площадке: базовый SOURCE_TEMPO × tempoMultiplier.
+   * Множитель переживает перезапуск (chrome.storage) и откатывается к 1.0,
+   * когда площадка 30 минут не подавала WAF/капчу.
+   */
+  private async tempoSleep(baseMs: number, useJitter = true) {
+    // Откат, если после последнего бана прошло достаточно
+    if (this.tempoMultiplier > 1 && this.lastWafAt && Date.now() - this.lastWafAt > 30 * 60_000) {
+      this.tempoMultiplier = 1;
+      await this.persistTempo();
+      console.log('[Updater] Tempo reset to 1.0 after 30 min without WAF');
+    }
+    const ms = baseMs * this.tempoMultiplier;
+    await keepAliveSleep(useJitter ? this.jitter(ms) : ms);
+  }
+
+  private async persistTempo() {
+    try {
+      await chrome.storage.local.set({
+        tempoState: { multiplier: this.tempoMultiplier, lastWafAt: this.lastWafAt },
+      });
+    } catch {
+      /* storage недоступен — не критично */
+    }
+  }
+
+  private async loadTempo() {
+    try {
+      const stored = await chrome.storage.local.get('tempoState');
+      const s = stored.tempoState as { multiplier?: number; lastWafAt?: number } | undefined;
+      if (s && typeof s.multiplier === 'number') {
+        this.tempoMultiplier = Math.min(3, Math.max(1, s.multiplier));
+        this.lastWafAt = s.lastWafAt ?? 0;
+        if (this.tempoMultiplier > 1) {
+          console.log(`[Updater] Restored tempo multiplier ×${this.tempoMultiplier.toFixed(2)}`);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   /** Ждать, пока истечёт WAF-кулдаун (прерываемо через shouldStop) */
   private async waitCooldown() {
     while (!this.shouldStop && Date.now() < this.cooldownUntil) {
@@ -271,6 +320,15 @@ export class UpdateManager {
       midnight.setHours(24, 0, 0, 0);
       this.cooldownUntil = Math.max(this.cooldownUntil, midnight.getTime());
       console.log(`[Updater] Daily cap reached (${used.count}/${this.settings.dailyCap}) — idle until ${midnight.toISOString()}`);
+      // Разово сообщаем серверу (там cooldown 20 ч на источник — не спамит)
+      apiClient
+        .reportDailyCap(
+          this.browserId,
+          SOURCE_DOMAIN[this.settings.source],
+          used.count,
+          this.settings.dailyCap
+        )
+        .catch((e) => console.warn('[Updater] reportDailyCap failed:', e));
       return 0;
     }
 
@@ -313,6 +371,20 @@ export class UpdateManager {
         // WAF/капча площадки — не долбим дальше: меняем IP и/или уходим в откат.
         if (msg === 'waf_block' || msg === 'captcha') {
           this.consecutiveWaf++;
+          // Замедляем темп: следующие запросы к площадке будут реже.
+          this.tempoMultiplier = Math.min(3, this.tempoMultiplier * 1.5);
+          this.lastWafAt = Date.now();
+          await this.persistTempo();
+
+          // Серверу — чтобы отключить источник и переключить соседние воркеры
+          apiClient
+            .reportBan(
+              this.browserId,
+              SOURCE_DOMAIN[this.settings.source],
+              `${msg} (strike ${this.consecutiveWaf}, tempo ×${this.tempoMultiplier.toFixed(2)})`
+            )
+            .catch((e) => console.warn('[Updater] reportBan failed:', e));
+
           // остальные строки батча отпускаем, не трогая площадку
           for (const rest of inFlight) {
             await apiClient.release(rest, this.browserId, `paused: ${msg}`).catch(() => {});
@@ -331,7 +403,7 @@ export class UpdateManager {
           const backoffMin = outcome === 'failed' ? Math.min(30, 5 * this.consecutiveWaf) : 1;
           this.cooldownUntil = Date.now() + backoffMin * 60_000;
           console.warn(
-            `[Updater] ${msg} — strike ${this.consecutiveWaf}, ` +
+            `[Updater] ${msg} — strike ${this.consecutiveWaf}, tempo ×${this.tempoMultiplier.toFixed(2)}, ` +
             (outcome === 'rotated'
               ? 'IP rotated, resuming shortly'
               : outcome === 'busy'
@@ -347,7 +419,7 @@ export class UpdateManager {
 
       this.reportProgress();
       await this.sendHeartbeat([...inFlight]);
-      await keepAliveSleep(this.jitter(this.settings.checkDelayMs));
+      await this.tempoSleep(this.settings.checkDelayMs);
     }
 
     await this.sendHeartbeat();
@@ -447,7 +519,7 @@ export class UpdateManager {
     if (!this.tabId) return null;
 
     await navigateTab(this.tabId, ad.url);
-    await keepAliveSleep(this.settings.parseDelayMs);
+    await this.tempoSleep(this.settings.parseDelayMs, false);
 
     const parseFn = this.settings.source === 'avito' ? parseAvitoAd : parseCianAd;
     const parseResult = await retry(() => parseFn(this.tabId!), 3, 3000);
@@ -532,6 +604,12 @@ export class UpdateManager {
       this.settings.checkDelayMs = tempo.checkDelayMs;
       this.settings.parseDelayMs = tempo.parseDelayMs;
       this.settings.dailyCap = tempo.dailyCap;
+      // Смена площадки — чистый лист: откат ЦИАНа не должен тормозить Авито
+      if (this.tempoMultiplier > 1) {
+        this.tempoMultiplier = 1;
+        this.lastWafAt = 0;
+        this.persistTempo();
+      }
       // Сохраняем в chrome.storage — чтобы пережил перезапуск
       chrome.storage.local.get('settings').then(({ settings: stored }) => {
         chrome.storage.local.set({

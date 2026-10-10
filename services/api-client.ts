@@ -185,6 +185,36 @@ class ApiClient {
     return data.data;
   }
 
+  /**
+   * Сообщить о бане/капче площадки. Сервер отключает источник на N часов
+   * и переключает остальных воркеров на соседний.
+   */
+  async reportBan(
+    browserId: string,
+    source: SourceDomain | null,
+    reason: string
+  ): Promise<{ success: boolean; disabled?: { source: string | null; disabledUntil: string | null } }> {
+    return this.request('/update/report-ban', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ browser_id: browserId, source: source ?? undefined, reason }),
+    });
+  }
+
+  /** Сообщить, что воркер упёрся в дневной кап площадки */
+  async reportDailyCap(
+    browserId: string,
+    source: SourceDomain | null,
+    used: number,
+    cap: number
+  ): Promise<{ success: boolean }> {
+    return this.request('/update/report-daily-cap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ browser_id: browserId, source: source ?? undefined, used, cap }),
+    });
+  }
+
   /** Проверить доступность API */
   async healthCheck(): Promise<boolean> {
     try {
