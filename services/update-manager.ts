@@ -562,20 +562,23 @@ export class UpdateManager {
    * не видит цену, а на cian в 74% случаев не мешала полному парсингу —
    * и при этом била по площадке лишним запросом.
    */
-  private async probePage(tabId: number): Promise<'ok' | 'archived' | 'ip_block' | 'captcha' | 'waf_block'> {
+  private async probePage(tabId: number, expectedUrl: string): Promise<'ok' | 'archived' | 'ip_block' | 'captcha' | 'waf_block'> {
     // Avito на интерстишле может не отдать из MAIN world — пробуем оба.
     let probe = await injectScriptMainWorld(tabId, () => ({
       title: document.title || '',
       text: document.body?.innerText?.substring(0, 800) || '',
+      url: location.href || '',
     })).catch(() => null);
     if (!probe || (!probe.title && !probe.text)) {
       probe = await injectScript(tabId, () => ({
         title: document.title || '',
         text: document.body?.innerText?.substring(0, 800) || '',
+        url: location.href || '',
       })).catch(() => null);
     }
     const bodyText = probe?.text || '';
     const title = probe?.title || '';
+    const finalUrl = probe?.url || '';
 
     if (this.settings.source === 'avito') {
       if (bodyText.includes('Доступ ограничен') || bodyText.includes('проблема с IP') || title.includes('Доступ ограничен')) {
@@ -600,6 +603,26 @@ export class UpdateManager {
     ) {
       return 'archived';
     }
+
+    // Avito на архивной карточке не показывает «не найдено», а редиректит
+    // на каталог/главную (…/kvartiry?f=… или www.avito.ru/). Тогда hydration
+    // не находится, parse падает в no_data и жжёт попытки. Ловим по URL.
+    if (finalUrl && expectedUrl) {
+      const expectedId = expectedUrl.match(/(\d{6,})\/?$/)?.[1] || null;
+      const finalId = finalUrl.match(/(\d{6,})\/?$/)?.[1] || null;
+      if (expectedId && finalId !== expectedId) {
+        return 'archived';
+      }
+      // каталог с фильтрами / голая главная вместо карточки
+      if (
+        finalUrl.includes('?f=') ||
+        /^https?:\/\/(?:www\.)?avito\.ru\/?$/.test(finalUrl) ||
+        (this.settings.source === 'avito' && !finalId && expectedId)
+      ) {
+        return 'archived';
+      }
+    }
+
     return 'ok';
   }
 
@@ -620,7 +643,7 @@ export class UpdateManager {
 
     // Быстрая проба до parseDelay: мёртвую карточку закрываем сразу,
     // а ip_block/captcha/waf_block кидаем наверх, чтобы воркер замедлился.
-    const probe = await this.probePage(tabId);
+    const probe = await this.probePage(tabId, ad.url);
     if (probe === 'archived') {
       console.log(`[Ad ${ad.id}] archived (probe), no parseDelay`);
       return { status: 'archived', updated: new Date().toISOString() };
@@ -640,6 +663,16 @@ export class UpdateManager {
       // чтобы не жечь строку в failed и дневной кап. Check здесь — только
       // запасной путь для no_data, не фаза на каждой карточке.
       if (parseResult.error === 'no_data') {
+        // Сначала смотрим, не улетела ли вкладка с карточки (редирект Avito
+        // на каталог) — это archived, а не «страница битая».
+        const probeAgain = await this.probePage(tabId, ad.url).catch(() => 'ok');
+        if (probeAgain === 'archived') {
+          console.log(`[Ad ${ad.id}] no_data → archived via probe redirect`);
+          return { status: 'archived', updated: new Date().toISOString() };
+        }
+        if (probeAgain !== 'ok') {
+          throw new Error(probeAgain);
+        }
         const checkFn = this.settings.source === 'avito' ? checkAvitoAdHtml : checkCianAdHtml;
         const recheck = await checkFn(ad.url).catch(() => null);
         if (recheck?.status === 'archived') {
