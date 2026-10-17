@@ -7,6 +7,44 @@ import type { Settings } from '../types';
 
 let manager: UpdateManager | null = null;
 
+/**
+ * Запуск воркера. Вызывается и из popup (через onMessage), и из будильника.
+ *
+ * ВАЖНО: нельзя звать через chrome.runtime.sendMessage из самого SW —
+ * onMessage в этом же контексте НЕ срабатывает, и после гибели MV3-воркера
+ * автоперезапуск молча не срабатывал (расширение выглядело «отключённым»).
+ */
+async function startWorker(source?: Settings['source']): Promise<{ started: true } | { error: string }> {
+  if (manager?.getStats().isRunning) {
+    return { error: 'Already running' };
+  }
+
+  const settings = await loadSettings();
+  if (source) settings.source = source;
+
+  // Запомнить, что воркер должен жить: по этому флагу будильник
+  // поднимает его после гибели service worker'а.
+  await chrome.storage.local.set({ autoStart: true });
+
+  manager = new UpdateManager(settings);
+  manager.onProgress((stats) => {
+    // Обновляем badge
+    chrome.action.setBadgeText({ text: String(stats.processed) });
+    chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' });
+
+    // Отправляем обновление в popup
+    chrome.runtime.sendMessage({ type: 'PROGRESS', ...stats }).catch(() => {});
+  });
+
+  // Запускаем в фоне
+  manager.start().then(() => {
+    chrome.action.setBadgeText({ text: '' });
+    chrome.runtime.sendMessage({ type: 'COMPLETED', ...manager!.getStats() }).catch(() => {});
+  });
+
+  return { started: true };
+}
+
 // Загрузка настроек
 async function loadSettings(): Promise<Settings> {
   const stored = await chrome.storage.local.get('settings');
@@ -41,34 +79,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handler = async () => {
     switch (message.type) {
       case 'START': {
-        if (manager?.getStats().isRunning) {
-          return { error: 'Already running' };
-        }
-
-        const settings = await loadSettings();
-        if (message.source) settings.source = message.source;
-
-        // Запомнить, что воркер должен жить: по этому флагу будильник
-        // поднимает его после гибели service worker'а.
-        await chrome.storage.local.set({ autoStart: true });
-
-        manager = new UpdateManager(settings);
-        manager.onProgress((stats) => {
-          // Обновляем badge
-          chrome.action.setBadgeText({ text: String(stats.processed) });
-          chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' });
-
-          // Отправляем обновление в popup
-          chrome.runtime.sendMessage({ type: 'PROGRESS', ...stats }).catch(() => {});
-        });
-
-        // Запускаем в фоне
-        manager.start().then(() => {
-          chrome.action.setBadgeText({ text: '' });
-          chrome.runtime.sendMessage({ type: 'COMPLETED', ...manager!.getStats() }).catch(() => {});
-        });
-
-        return { started: true };
+        return await startWorker(message.source);
       }
 
       case 'STOP': {
@@ -108,12 +119,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Alarms для.periodic checks (если popup закрыт)
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'periodic-check') {
-    const settings = await loadSettings();
-    if (!manager?.getStats().isRunning) {
-      // Автозапуск если включено
-      const stored = await chrome.storage.local.get('autoStart');
-      if (stored.autoStart) {
-        chrome.runtime.sendMessage({ type: 'START', source: settings.source }).catch(() => {});
+    if (manager?.getStats().isRunning) return;
+
+    // Автозапуск если включено. Зовём startWorker напрямую —
+    // sendMessage из SW не попадает в собственный onMessage.
+    const stored = await chrome.storage.local.get('autoStart');
+    if (stored.autoStart) {
+      const settings = await loadSettings();
+      const result = await startWorker(settings.source);
+      if ('started' in result) {
+        console.log('[Updater] Worker restarted by alarm');
       }
     }
   }
