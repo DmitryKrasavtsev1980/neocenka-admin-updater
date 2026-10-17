@@ -30,8 +30,25 @@ export async function checkAvitoAdHtml(url: string): Promise<CheckResult> {
 
     const html = await response.text();
 
-    // Проверка на закрытое объявление
-    if (html.includes('Объявление закрыто') || html.includes('closedItem') || html.includes('не найдено')) {
+    // Мягкий рейт-лимит Avito: «Доступ ограничен: проблема с IP».
+    // Это не бан и не капча в чистом виде — площадка просит переждать
+    // и/или решить капчу по кнопке «Продолжить». Относим к ip_block,
+    // чтобы воркер замедлился и не сжигал попытки в no_data.
+    if (html.includes('Доступ ограничен') || html.includes('проблема с IP')) {
+      return { status: 'error', price: null, priceChanged: false, statusChanged: false, error: 'ip_block' };
+    }
+
+    // Проверка на закрытое/удалённое объявление — ловим заранее,
+    // чтобы не открывать вкладку и не сжигать parseDelay на мёртвой карточке
+    if (
+      html.includes('Объявление закрыто') ||
+      html.includes('closedItem') ||
+      html.includes('не найдено') ||
+      html.includes('страница не найдена') ||
+      html.includes('объявление удалено') ||
+      html.includes('снято с публикации') ||
+      html.includes('"isDeleted":true')
+    ) {
       return { status: 'archived', price: null, priceChanged: false, statusChanged: true };
     }
 

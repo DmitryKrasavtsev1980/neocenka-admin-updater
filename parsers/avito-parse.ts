@@ -4,7 +4,7 @@
  */
 
 import type { ParseResult, PriceHistoryItem } from '../types';
-import { injectScriptMainWorld } from '../utils/tab-manager';
+import { injectScript, injectScriptMainWorld } from '../utils/tab-manager';
 
 /**
  * Чтение данных из window.__staticRouterHydrationData (MAIN world)
@@ -205,12 +205,36 @@ export async function parseAvitoAd(tabId: number): Promise<ParseResult> {
     }
 
     if (!pageData?.buyerItemJson) {
-      // Fallback: проверяем CAPTCHA или 404
-      const bodyText = await injectScriptMainWorld(tabId, () => document.body?.innerText?.substring(0, 500) || '');
-      if (bodyText?.includes('капч') || bodyText?.includes('captcha')) {
+      // Fallback: проверяем CAPTCHA, IP-блок или мёртвую страницу.
+      // MAIN world на интерстишле Avito может не отработать — дублируем
+      // пробой из ISOLATED world, иначе уходим в пустой no_data.
+      let probe = await injectScriptMainWorld(tabId, () => ({
+        title: document.title || '',
+        text: document.body?.innerText?.substring(0, 800) || '',
+      }));
+      if (!probe || (!probe.title && !probe.text)) {
+        probe = await injectScript(tabId, () => ({
+          title: document.title || '',
+          text: document.body?.innerText?.substring(0, 800) || '',
+        }));
+      }
+      const bodyText = probe?.text || '';
+      const title = probe?.title || '';
+      if (bodyText.includes('Доступ ограничен') || bodyText.includes('проблема с IP') || title.includes('Доступ ограничен')) {
+        return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'ip_block' };
+      }
+      if (bodyText.includes('капч') || bodyText.includes('captcha') || title.includes('captcha')) {
         return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'captcha' };
       }
-      if (bodyText?.includes('не найдено') || bodyText?.includes('закрыто')) {
+      if (
+        bodyText.includes('не найдено') ||
+        bodyText.includes('страница не найдена') ||
+        bodyText.includes('объявление удалено') ||
+        bodyText.includes('объявление закрыто') ||
+        bodyText.includes('снято с публикации') ||
+        title.includes('404') ||
+        title.includes('не найдено')
+      ) {
         return { status: 'archived', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null };
       }
       return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'no_data' };

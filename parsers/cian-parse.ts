@@ -130,16 +130,11 @@ function parseRuDate(text: string): string | null {
  */
 export async function parseCianAd(tabId: number): Promise<ParseResult> {
   try {
-    const rawData = await injectScript(tabId, parseCianDetailPage);
-    if (!rawData) {
-      return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'no_data' };
-    }
-
-    // Обработка ошибок. Читаем и title, и текст через injectScript:
-    // здесь код работает в service worker, где нет document.
+    // Сначала читаем title/текст: без этого сырой `rawData == null` превращался
+    // в no_data даже на капче и 404 — строка горела в failed вместо captcha/archived.
     const probe = await injectScript(tabId, () => ({
       title: document.title || '',
-      text: document.body?.innerText?.substring(0, 500) || '',
+      text: document.body?.innerText?.substring(0, 800) || '',
     }));
     const bodyText = probe?.text || '';
     const title = probe?.title || '';
@@ -151,8 +146,20 @@ export async function parseCianAd(tabId: number): Promise<ParseResult> {
     if (bodyText.includes('подозрительный трафик') || bodyText.includes('cian_waf_block') || title === 'Ошибка - Циан') {
       return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'waf_block' };
     }
-    if (bodyText.includes('не найдено') || title.includes('404')) {
+    // Мёртвые страницы — закрываем как archived, а не как no_data
+    if (
+      bodyText.includes('не найдено') ||
+      bodyText.includes('страница не найдена') ||
+      bodyText.includes('объявление удалено') ||
+      bodyText.includes('снято с публикации') ||
+      title.includes('404')
+    ) {
       return { status: 'archived', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null };
+    }
+
+    const rawData = await injectScript(tabId, parseCianDetailPage);
+    if (!rawData) {
+      return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'no_data' };
     }
 
     // Парсинг даты обновления

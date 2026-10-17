@@ -174,6 +174,8 @@ export class UpdateManager {
    */
   private tempoMultiplier = 1.0;
   private lastWafAt = 0;
+  /** Последняя ошибка для heartbeat; null = воркер здоров (сервер сбрасывает last_error) */
+  private lastError: string | null = null;
   private modemSettings: ModemSettings = DEFAULT_MODEM_SETTINGS;
 
   constructor(settings: Partial<Settings> = {}) {
@@ -368,12 +370,17 @@ export class UpdateManager {
         if (update) this.matched++;
         this.processed++;
         await bumpDailyUsed();
+        // Карточка закрыта без ошибки — гасим залипший last_error
+        this.lastError = null;
+        // Успех прерывает серию обрывов: следующий ip_block/captcha начнётся с strike 1
+        this.consecutiveWaf = 0;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[Updater] Ad ${ad.id} (queue ${ad.queue_id}) failed:`, msg);
         await apiClient.release(ad.queue_id, this.browserId, msg).catch(() => {});
         this.errors++;
         this.processed++;
+        this.lastError = msg.slice(0, 200);
         await bumpDailyUsed();
 
         // WAF/капча площадки — не долбим дальше: меняем IP и/или уходим в откат.
@@ -385,11 +392,13 @@ export class UpdateManager {
           await this.persistTempo();
 
           // Серверу — чтобы отключить источник и переключить соседние воркеры
+          const banReason = `${msg} (strike ${this.consecutiveWaf}, tempo ×${this.tempoMultiplier.toFixed(2)})`;
+          this.lastError = banReason;
           apiClient
             .reportBan(
               this.browserId,
               SOURCE_DOMAIN[this.settings.source],
-              `${msg} (strike ${this.consecutiveWaf}, tempo ×${this.tempoMultiplier.toFixed(2)})`
+              banReason
             )
             .catch((e) => console.warn('[Updater] reportBan failed:', e));
 
@@ -419,6 +428,29 @@ export class UpdateManager {
                 : `pausing ${backoffMin} min`)
           );
           if (outcome !== 'failed') this.consecutiveWaf = 0;
+          break;
+        }
+
+        // Мягкий рейт-лимит Avito («Доступ ограничен: проблема с IP»).
+        // Это не бан: площадка просит переждать. Не reportBan и не отключаем
+        // источник — иначе Avito ляжет на 3 часа из-за обычного флуд-контроля.
+        if (msg === 'ip_block') {
+          this.consecutiveWaf++;
+          this.tempoMultiplier = Math.min(3, this.tempoMultiplier * 1.5);
+          this.lastWafAt = Date.now();
+          await this.persistTempo();
+          this.lastError = `ip_block (strike ${this.consecutiveWaf}, tempo ×${this.tempoMultiplier.toFixed(2)})`;
+
+          for (const rest of inFlight) {
+            await apiClient.release(rest, this.browserId, 'paused: ip_block').catch(() => {});
+          }
+          inFlight.clear();
+
+          const backoffMin = Math.min(10, 2 * this.consecutiveWaf);
+          this.cooldownUntil = Date.now() + backoffMin * 60_000;
+          console.warn(
+            `[Updater] ip_block — strike ${this.consecutiveWaf}, tempo ×${this.tempoMultiplier.toFixed(2)}, pausing ${backoffMin} min`
+          );
           break;
         }
       } finally {
@@ -542,6 +574,21 @@ export class UpdateManager {
     const parseResult = await retry(() => parseFn(this.tabId!), 3, 3000);
 
     if (parseResult.status === 'error') {
+      // no_data — часто мёртвая карточка, которую HTML-check видит лучше,
+      // чем hydration-парсер. Переспрашиваем дёшево и закрываем как archived,
+      // чтобы не жечь строку в failed и дневной кап.
+      if (parseResult.error === 'no_data') {
+        const recheck = await checkFn(ad.url).catch(() => null);
+        if (recheck?.status === 'archived') {
+          console.log(`[Ad ${ad.id}] no_data → archived via check fallback`);
+          return { status: 'archived', updated: new Date().toISOString() };
+        }
+        // Повторная проверка увидела капчу/IP-блок — это не no_data,
+        // отдаём настоящий код, чтобы воркер замедлился, а не жёг попытки.
+        if (recheck?.status === 'error' && recheck.error) {
+          throw new Error(recheck.error);
+        }
+      }
       throw new Error(parseResult.error || 'parse error');
     }
 
@@ -589,6 +636,10 @@ export class UpdateManager {
           processed: this.processed,
           matched: this.matched,
           errors: this.errors,
+          // Явно шлём строку (пустую — чтобы сервер СБРОСИЛ залипший last_error).
+          // beat() на сервере пишет только не-null значения, поэтому без этой
+          // строки сообщение о дневной капче висело бы вечно.
+          last_error: this.lastError ?? '',
         },
         queueIds
       );

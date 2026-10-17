@@ -131,7 +131,7 @@ class ApiClient {
   async heartbeat(
     browserId: string,
     source: SourceDomain | null,
-    stats: { processed: number; matched: number; errors: number },
+    stats: { processed: number; matched: number; errors: number; last_error?: string },
     queueIds: number[] = []
   ): Promise<{ success: boolean; extended: number; config?: Record<string, unknown> }> {
     return this.request('/update/heartbeat', {

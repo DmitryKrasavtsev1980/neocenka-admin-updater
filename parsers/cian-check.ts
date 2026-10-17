@@ -34,8 +34,14 @@ export async function checkCianAdHtml(url: string): Promise<CheckResult> {
       return { status: 'error', price: null, priceChanged: false, statusChanged: false, error: 'waf_block' };
     }
 
-    // Проверка на снятое объявление
-    if (html.includes('OfferUnpublished') || html.includes('снято с публикации')) {
+    // Проверка на снятое/удалённое объявление — без вкладки
+    if (
+      html.includes('OfferUnpublished') ||
+      html.includes('снято с публикации') ||
+      html.includes('не найдено') ||
+      html.includes('страница не найдена') ||
+      html.includes('объявление удалено')
+    ) {
       return { status: 'archived', price: null, priceChanged: false, statusChanged: true };
     }
 
