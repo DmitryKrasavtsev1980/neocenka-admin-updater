@@ -598,6 +598,9 @@ export class UpdateManager {
       bodyText.includes('объявление удалено') ||
       bodyText.includes('объявление закрыто') ||
       bodyText.includes('снято с публикации') ||
+      bodyText.includes('объявление истекло') ||
+      bodyText.includes('объявление не посмотреть') ||
+      bodyText.includes('объявление не найдено') ||
       title.includes('404') ||
       title.includes('не найдено')
     ) {

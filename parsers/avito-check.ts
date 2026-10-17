@@ -47,6 +47,8 @@ export async function checkAvitoAdHtml(url: string): Promise<CheckResult> {
       html.includes('страница не найдена') ||
       html.includes('объявление удалено') ||
       html.includes('снято с публикации') ||
+      html.includes('Объявление истекло') ||
+      html.includes('объявление не посмотреть') ||
       html.includes('"isDeleted":true')
     ) {
       return { status: 'archived', price: null, priceChanged: false, statusChanged: true };
