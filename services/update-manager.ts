@@ -22,7 +22,7 @@ import type {
 } from '../types';
 import { apiClient } from './api-client';
 import { sleep, keepAliveSleep, retry } from '../utils/delays';
-import { createBackgroundTab, closeTab, waitForTabLoad, navigateTab } from '../utils/tab-manager';
+import { createBackgroundTab, closeTab, waitForTabLoad, navigateTab, injectScript, injectScriptMainWorld } from '../utils/tab-manager';
 import { parseAvitoAd } from '../parsers/avito-parse';
 import { parseCianAd } from '../parsers/cian-parse';
 import { checkAvitoAdHtml } from '../parsers/avito-check';
@@ -556,45 +556,79 @@ export class UpdateManager {
   }
 
   /**
+   * Быстрая проба уже загруженной вкладки — ловит мёртвые карточки и
+   * рейт-лимит БЕЗ второго запроса к площадке и без ожидания parseDelay.
+   * Раньше это делала отдельная check-фаза (fetch), которая на avito вообще
+   * не видит цену, а на cian в 74% случаев не мешала полному парсингу —
+   * и при этом била по площадке лишним запросом.
+   */
+  private async probePage(tabId: number): Promise<'ok' | 'archived' | 'ip_block' | 'captcha' | 'waf_block'> {
+    // Avito на интерстишле может не отдать из MAIN world — пробуем оба.
+    let probe = await injectScriptMainWorld(tabId, () => ({
+      title: document.title || '',
+      text: document.body?.innerText?.substring(0, 800) || '',
+    })).catch(() => null);
+    if (!probe || (!probe.title && !probe.text)) {
+      probe = await injectScript(tabId, () => ({
+        title: document.title || '',
+        text: document.body?.innerText?.substring(0, 800) || '',
+      })).catch(() => null);
+    }
+    const bodyText = probe?.text || '';
+    const title = probe?.title || '';
+
+    if (this.settings.source === 'avito') {
+      if (bodyText.includes('Доступ ограничен') || bodyText.includes('проблема с IP') || title.includes('Доступ ограничен')) {
+        return 'ip_block';
+      }
+    } else {
+      if (bodyText.includes('подозрительный трафик') || bodyText.includes('cian_waf_block') || title === 'Ошибка - Циан') {
+        return 'waf_block';
+      }
+    }
+    if (bodyText.includes('капч') || bodyText.includes('captcha') || title.includes('captcha')) {
+      return 'captcha';
+    }
+    if (
+      bodyText.includes('не найдено') ||
+      bodyText.includes('страница не найдена') ||
+      bodyText.includes('объявление удалено') ||
+      bodyText.includes('объявление закрыто') ||
+      bodyText.includes('снято с публикации') ||
+      title.includes('404') ||
+      title.includes('не найдено')
+    ) {
+      return 'archived';
+    }
+    return 'ok';
+  }
+
+  /**
    * Обработать одно объявление.
    *
-   * Сначала идёт check-фаза (fetch без вкладки): она ловит снятые карточки
-   * и неизменённые цены, чтобы не открывать страницу в браузере вообще.
-   * Вкладка нужна только когда действительно что-то поменялось.
+   * Всегда полный парсинг. Check-фаза (fetch без вкладки) отсюда убрана:
+   * на avito HTML вообще не содержит цену, на cian в 74% случаев карточка
+   * всё равно уходила в полный парс — а лишний fetch только кормил
+   * флуд-контроль площадки. Мёртвые карточки и блоки ловит probePage
+   * уже на загруженной вкладке.
    */
   private async processAd(ad: ClaimedAd): Promise<AdUpdateData | null> {
-    // ─── Check-фаза: дёшево, без вкладки ─────────────────────
-    const checkFn = this.settings.source === 'avito' ? checkAvitoAdHtml : checkCianAdHtml;
-    const check = await checkFn(ad.url);
-
-    if (check.status === 'archived') {
-      // карточку сняли — вкладка не нужна
-      console.log(`[Ad ${ad.id}] archived (check), tab not opened`);
-      return { status: 'archived', updated: new Date().toISOString() };
-    }
-
-    if (check.status === 'error') {
-      throw new Error(check.error || 'check error');
-    }
-
-    // Цена из check достоверна и совпала с тем, что уже в базе —
-    // полный парсинг ничего не даст. Возвращаем null, тогда закроем
-    // строку одним лишь обновлением parsed_at.
-    // Но если статус в базе отличается (например, снятое снова ожило) —
-    // перечитываем карточку целиком.
-    const priceKnown = check.price !== null && ad.price !== null;
-    const priceUnchanged = priceKnown && Number(check.price) === Number(ad.price);
-    const statusMatches = ad.status === 'active';
-    if (priceUnchanged && statusMatches) {
-      console.log(`[Ad ${ad.id}] price unchanged (${check.price}), tab not opened`);
-      return null;
-    }
-
-    // ─── Полный парсинг: цена изменилась или её не удалось прочитать ───
     const tabId = await this.ensureTab();
     if (tabId === null) return null;
 
     await navigateTab(tabId, ad.url);
+
+    // Быстрая проба до parseDelay: мёртвую карточку закрываем сразу,
+    // а ip_block/captcha/waf_block кидаем наверх, чтобы воркер замедлился.
+    const probe = await this.probePage(tabId);
+    if (probe === 'archived') {
+      console.log(`[Ad ${ad.id}] archived (probe), no parseDelay`);
+      return { status: 'archived', updated: new Date().toISOString() };
+    }
+    if (probe !== 'ok') {
+      throw new Error(probe);
+    }
+
     await this.tempoSleep(this.settings.parseDelayMs, false);
 
     const parseFn = this.settings.source === 'avito' ? parseAvitoAd : parseCianAd;
@@ -603,8 +637,10 @@ export class UpdateManager {
     if (parseResult.status === 'error') {
       // no_data — часто мёртвая карточка, которую HTML-check видит лучше,
       // чем hydration-парсер. Переспрашиваем дёшево и закрываем как archived,
-      // чтобы не жечь строку в failed и дневной кап.
+      // чтобы не жечь строку в failed и дневной кап. Check здесь — только
+      // запасной путь для no_data, не фаза на каждой карточке.
       if (parseResult.error === 'no_data') {
+        const checkFn = this.settings.source === 'avito' ? checkAvitoAdHtml : checkCianAdHtml;
         const recheck = await checkFn(ad.url).catch(() => null);
         if (recheck?.status === 'archived') {
           console.log(`[Ad ${ad.id}] no_data → archived via check fallback`);
