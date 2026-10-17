@@ -530,6 +530,32 @@ export class UpdateManager {
   }
 
   /**
+   * Вкладка парсинга: создать заново, если её закрыли (reload расширения,
+   * ручная чистка, краш). Без этого navigateTab падает в «No tab with id»
+   * и все карточки под полный парс уходят в ошибку до перезапуска воркера.
+   */
+  private async ensureTab(): Promise<number | null> {
+    const baseUrl = this.settings.source === 'avito' ? 'https://www.avito.ru/' : 'https://www.cian.ru/';
+    if (this.tabId !== null) {
+      try {
+        await chrome.tabs.get(this.tabId);
+        return this.tabId;
+      } catch {
+        this.tabId = null;
+      }
+    }
+    try {
+      this.tabId = await createBackgroundTab(baseUrl);
+      await waitForTabLoad(this.tabId, 15000);
+      console.log(`[Updater] Tab recreated: ${this.tabId}`);
+      return this.tabId;
+    } catch (err) {
+      console.warn('[Updater] ensureTab failed:', err);
+      return null;
+    }
+  }
+
+  /**
    * Обработать одно объявление.
    *
    * Сначала идёт check-фаза (fetch без вкладки): она ловит снятые карточки
@@ -565,13 +591,14 @@ export class UpdateManager {
     }
 
     // ─── Полный парсинг: цена изменилась или её не удалось прочитать ───
-    if (!this.tabId) return null;
+    const tabId = await this.ensureTab();
+    if (tabId === null) return null;
 
-    await navigateTab(this.tabId, ad.url);
+    await navigateTab(tabId, ad.url);
     await this.tempoSleep(this.settings.parseDelayMs, false);
 
     const parseFn = this.settings.source === 'avito' ? parseAvitoAd : parseCianAd;
-    const parseResult = await retry(() => parseFn(this.tabId!), 3, 3000);
+    const parseResult = await retry(() => parseFn(tabId), 3, 3000);
 
     if (parseResult.status === 'error') {
       // no_data — часто мёртвая карточка, которую HTML-check видит лучше,
