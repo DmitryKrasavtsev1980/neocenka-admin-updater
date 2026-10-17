@@ -632,13 +632,29 @@ export class UpdateManager {
   /**
    * Обработать одно объявление.
    *
-   * Всегда полный парсинг. Check-фаза (fetch без вкладки) отсюда убрана:
-   * на avito HTML вообще не содержит цену, на cian в 74% случаев карточка
-   * всё равно уходила в полный парс — а лишний fetch только кормил
-   * флуд-контроль площадки. Мёртвые карточки и блоки ловит probePage
-   * уже на загруженной вкладке.
+   * active  — полный парсинг через вкладку (как просили: «всегда полностью»).
+   * archived — лёгкий fetch без вкладки: карточка уже мертва, грузить
+   *   страницу в браузере бессмысленно и это жжёт флуд-контроль площадки.
+   *   Если fetch увидел, что объявление ожило — уходим в полный парс.
    */
   private async processAd(ad: ClaimedAd): Promise<AdUpdateData | null> {
+    // Уже знаем, что объявление в архиве — дешёвая проверка без браузера.
+    if (ad.status === 'archived') {
+      const checkFn = this.settings.source === 'avito' ? checkAvitoAdHtml : checkCianAdHtml;
+      const recheck = await checkFn(ad.url).catch(() => null);
+
+      if (recheck?.status === 'error' && recheck.error) {
+        // ip_block/captcha/waf — воркер замедлится, попытку не жжём
+        throw new Error(recheck.error);
+      }
+      if (recheck?.status === 'archived') {
+        console.log(`[Ad ${ad.id}] archived (check fetch), no tab`);
+        return { status: 'archived', updated: new Date().toISOString() };
+      }
+      // active или молчит — похоже ожило. Уходим в полный парс.
+      console.log(`[Ad ${ad.id}] archived → reactivated?, full parse`);
+    }
+
     const tabId = await this.ensureTab();
     if (tabId === null) return null;
 
