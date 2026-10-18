@@ -149,12 +149,16 @@ function mergePriceHistory(existing: PriceHistoryItem[], newEntries: PriceHistor
 }
 
 /**
- * Определить updated по логике пользовательского расширения
+ * Определить updated по логике пользовательского расширения.
+ *
+ * archived — НИКОГДА не подставляем now(): в updated остаётся последняя
+ * подтверждённая дата изменения на площадке. Если даты нет вообще —
+ * возвращаем undefined, чтобы поле не перезаписывалось.
  */
 function resolveUpdated(
   parsed: ParseResult,
   mergedHistory: PriceHistoryItem[]
-): string {
+): string | undefined {
   if (parsed.status === 'active') {
     return new Date().toISOString();
   }
@@ -164,7 +168,7 @@ function resolveUpdated(
   if (mergedHistory.length > 0) {
     return mergedHistory[mergedHistory.length - 1].date;
   }
-  return new Date().toISOString();
+  return undefined;
 }
 
 export class UpdateManager {
@@ -322,6 +326,15 @@ export class UpdateManager {
     await keepAliveSleep(useJitter ? this.jitter(ms) : ms);
   }
 
+  /**
+   * Ожидание hydration (parseDelay). НЕ умножается на tempoMultiplier:
+   * это не темп запросов к площадке, а settle уже загруженной страницы.
+   * Раньше после ip_block ×3 живая карточка Avito ждала 8×3=24 с просто так.
+   */
+  private async parseDelaySleep(baseMs: number) {
+    await keepAliveSleep(baseMs);
+  }
+
   private async persistTempo() {
     try {
       await chrome.storage.local.set({
@@ -419,6 +432,17 @@ export class UpdateManager {
         this.lastError = null;
         // Успех прерывает серию обрывов: следующий ip_block/captcha начнётся с strike 1
         this.consecutiveWaf = 0;
+        // Медленный откат темпа: после серии успехов ×3 не должен держаться
+        // весь 30-минутный хвост — иначе воркер возвращается из backoff
+        // почти остановленным (avito ×3 = ~20/ч вместо ~55/ч).
+        if (this.tempoMultiplier > 1) {
+          this.tempoMultiplier = Math.max(1, this.tempoMultiplier * 0.92);
+          if (this.tempoMultiplier <= 1.02) {
+            this.tempoMultiplier = 1;
+            console.log('[Updater] Tempo back to 1.0 after successful cards');
+          }
+          await this.persistTempo();
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[Updater] Ad ${ad.id} (queue ${ad.queue_id}) failed:`, msg);
@@ -481,9 +505,12 @@ export class UpdateManager {
         // источник — иначе Avito ляжет на 3 часа из-за обычного флуд-контроля.
         if (msg === 'ip_block') {
           this.consecutiveWaf++;
-          this.tempoMultiplier = Math.min(3, this.tempoMultiplier * 1.5);
+          // Мягкий флуд-контроль: наказание — это уже backoff 10–20 мин.
+          // Эскалация tempo ×1.5 поверх backoff заставляла воркер ползти
+          // и после снятия блока (avito ×3 = ~20/ч вместо ~55/ч), а без
+          // успешных карточек decay ×0.92 не срабатывал и ×3 залипал.
+          // Темп на ip_block не трогаем: его гасит успех / смена IP / 30 мин тишины.
           this.lastWafAt = Date.now();
-          await this.persistTempo();
           this.lastError = `ip_block (strike ${this.consecutiveWaf}, tempo ×${this.tempoMultiplier.toFixed(2)})`;
 
           for (const rest of inFlight) {
@@ -543,6 +570,14 @@ export class UpdateManager {
       if (!r.ok) {
         console.warn(`[Updater] IP rotate failed: ${r.error}`);
         return 'failed';
+      }
+      // Свежий IP — зачем ему чужой замедленный темп. Без сброса воркер
+      // выходил из ротации с ×2–×3 и полз.
+      if (this.tempoMultiplier > 1) {
+        this.tempoMultiplier = 1;
+        this.lastWafAt = 0;
+        await this.persistTempo();
+        console.log('[Updater] Tempo reset to 1.0 after IP rotation');
       }
       return 'rotated';
     } finally {
@@ -697,7 +732,8 @@ export class UpdateManager {
       }
       if (recheck?.status === 'archived') {
         console.log(`[Ad ${ad.id}] archived (check fetch), no tab`);
-        return { status: 'archived', updated: new Date().toISOString() };
+        // updated не трогаем — остаётся последняя подтверждённая дата площадки
+        return { status: 'archived' };
       }
       // active или молчит — похоже ожило. Уходим в полный парс.
       console.log(`[Ad ${ad.id}] archived → reactivated?, full parse`);
@@ -713,7 +749,7 @@ export class UpdateManager {
     const probe = await this.probePage(tabId, ad.url);
     if (probe === 'archived') {
       console.log(`[Ad ${ad.id}] archived (probe), no parseDelay`);
-      return { status: 'archived', updated: new Date().toISOString() };
+      return { status: 'archived' };
     }
     if (probe !== 'ok') {
       throw new Error(probe);
@@ -722,7 +758,7 @@ export class UpdateManager {
     // Короткий settle hydration: страница уже загружена (probe её читал),
     // запрос к площадке уже ушёл. Ждать тут полный checkDelay — двойная
     // задержка на живой карточке (70 с / 105 с) без выгоды для банов.
-    await this.tempoSleep(this.settings.parseDelayMs, false);
+    await this.parseDelaySleep(this.settings.parseDelayMs);
 
     const parseFn = this.settings.source === 'avito' ? parseAvitoAd : parseCianAd;
     const parseResult = await retry(() => parseFn(tabId), 3, 3000);
@@ -738,7 +774,7 @@ export class UpdateManager {
         const probeAgain = await this.probePage(tabId, ad.url).catch(() => 'ok');
         if (probeAgain === 'archived') {
           console.log(`[Ad ${ad.id}] no_data → archived via probe redirect`);
-          return { status: 'archived', updated: new Date().toISOString() };
+          return { status: 'archived' };
         }
         if (probeAgain !== 'ok') {
           throw new Error(probeAgain);
@@ -747,7 +783,7 @@ export class UpdateManager {
         const recheck = await checkFn(ad.url).catch(() => null);
         if (recheck?.status === 'archived') {
           console.log(`[Ad ${ad.id}] no_data → archived via check fallback`);
-          return { status: 'archived', updated: new Date().toISOString() };
+          return { status: 'archived' };
         }
         // Повторная проверка увидела капчу/IP-блок — это не no_data,
         // отдаём настоящий код, чтобы воркер замедлился, а не жёг попытки.
