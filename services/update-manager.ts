@@ -52,10 +52,21 @@ const DEFAULT_SETTINGS: Settings = {
  * НЕ читается из настроек: раньше в дефолтах стояло 12 с / 18 с, и ЦИАН
  * банил IP за полчаса. Дельта ±25% от `jitter()` — попадаем в
  * ЦИАН 41–69 с (цель 45–60 с), Авито 26–44 с (цель 30–40 с).
+ *
+ * Семантика полей (2026-10-18):
+ * - checkDelayMs  — ГРАФИК ЗАПРОСОВ: пауза перед следующим navigate/fetch
+ *   к площадке. Единственное, что реально снимает рейт-лимит.
+ * - parseDelayMs  — НЕ пауза между запросами, а ожидание hydration уже
+ *   загруженной вкладки после navigate+probe. Запрос к площадке уже ушёл,
+ *   поэтому тут можно ждать мало — иначе живая карточка платила
+ *   parseDelay+checkDelay (70 с / 105 с) впустую.
+ * - dailyCap      — потолок карточек в сутки с одного IP. Avito душит
+ *   флуд-контроль именно за объём, а не за скорость: кап 2000 при 35 с
+ *   давал шторм ~2400/день и постоянный ip_block.
  */
 export const SOURCE_TEMPO = {
-  avito: { checkDelayMs: 35_000, parseDelayMs: 35_000, dailyCap: 2000 },
-  cian: { checkDelayMs: 55_000, parseDelayMs: 50_000, dailyCap: 1200 },
+  avito: { checkDelayMs: 50_000, parseDelayMs: 8_000, dailyCap: 1000 },
+  cian: { checkDelayMs: 65_000, parseDelayMs: 10_000, dailyCap: 1000 },
 } as const satisfies Record<string, { checkDelayMs: number; parseDelayMs: number; dailyCap: number }>;
 
 /** Дневной счётчик обработанных карточек — для `dailyCap` */
@@ -219,6 +230,10 @@ export class UpdateManager {
       // по площадкам). Иначе оба успеют урвать Авито до первого ответа.
       await this.sendHeartbeat();
 
+      // Вкладки от прошлого запуска SW (утечка после chrome.runtime.reload):
+      // без уборки их копится по 3 и каждая жрёт память/запросы.
+      await this.cleanupStaleTabs();
+
       const baseUrl = this.settings.source === 'avito' ? 'https://www.avito.ru/' : 'https://www.cian.ru/';
       this.tabId = await createBackgroundTab(baseUrl);
       await waitForTabLoad(this.tabId, 15000);
@@ -231,8 +246,9 @@ export class UpdateManager {
 
         const claimed = await this.processBatch();
         if (!this.shouldStop && claimed > 0 && Date.now() >= this.cooldownUntil) {
-          // очередь ещё не пуста — берём следующую порцию
-          await this.tempoSleep(this.settings.parseDelayMs);
+          // очередь ещё не пуста — берём следующую порцию.
+          // Пауза между батчами = график запросов, то есть checkDelay.
+          await this.tempoSleep(this.settings.checkDelayMs);
           continue;
         }
         if (!this.shouldStop && Date.now() >= this.cooldownUntil) {
@@ -254,6 +270,33 @@ export class UpdateManager {
 
   stop() {
     this.shouldStop = true;
+  }
+
+  /**
+   * Закрыть вкладки площадки, оставшиеся от прошлого запуска.
+   *
+   * После chrome.runtime.reload() / падения SW вкладки avito/cian не
+   * закрываются сами и копятся (видели по 3 штуки вместо 1). Popup и
+   * chrome:// не трогаем — только домен текущей площадки.
+   */
+  private async cleanupStaleTabs() {
+    try {
+      const domain = SOURCE_DOMAIN[this.settings.source];
+      const tabs = await chrome.tabs.query({});
+      let closed = 0;
+      for (const tab of tabs) {
+        if (!tab.id || tab.id === this.tabId) continue;
+        const url = tab.url || '';
+        if (!url.includes(domain)) continue;
+        await closeTab(tab.id).catch(() => {});
+        closed++;
+      }
+      if (closed > 0) {
+        console.log(`[Updater] Closed ${closed} stale ${domain} tab(s)`);
+      }
+    } catch (err) {
+      console.warn('[Updater] cleanupStaleTabs failed:', err);
+    }
   }
 
   /** ±25% джиттер, чтобы паузы не выглядели машинно-равномерными */
@@ -446,7 +489,9 @@ export class UpdateManager {
           }
           inFlight.clear();
 
-          const backoffMin = Math.min(10, 2 * this.consecutiveWaf);
+          // Флуд-контроль Avito снимается за 10–20 минут тишины.
+          // Раньше 2–10 мин — воркер возвращался слишком рано и нарывался снова.
+          const backoffMin = Math.min(20, 10 + 5 * this.consecutiveWaf);
           this.cooldownUntil = Date.now() + backoffMin * 60_000;
           console.warn(
             `[Updater] ip_block — strike ${this.consecutiveWaf}, tempo ×${this.tempoMultiplier.toFixed(2)}, pausing ${backoffMin} min`
@@ -671,6 +716,9 @@ export class UpdateManager {
       throw new Error(probe);
     }
 
+    // Короткий settle hydration: страница уже загружена (probe её читал),
+    // запрос к площадке уже ушёл. Ждать тут полный checkDelay — двойная
+    // задержка на живой карточке (70 с / 105 с) без выгоды для банов.
     await this.tempoSleep(this.settings.parseDelayMs, false);
 
     const parseFn = this.settings.source === 'avito' ? parseAvitoAd : parseCianAd;
