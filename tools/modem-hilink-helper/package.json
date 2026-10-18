@@ -1,0 +1,12 @@
+{
+  "name": "modem-hilink-helper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Локальный HTTP-хелпер смены IP для Huawei E3372 HiLink (dataswitch/reboot) с привязкой к сетевому адаптеру",
+  "main": "index.js",
+  "scripts": {
+    "a": "node index.js --slot A --iface 192.168.8.103 --port 8891",
+    "b": "node index.js --slot B --iface 192.168.8.107 --port 8892"
+  },
+  "dependencies": {}
+}

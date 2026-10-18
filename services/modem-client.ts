@@ -147,6 +147,24 @@ export class ModemClient {
         return { ok: false, oldIp: oldIp ?? undefined, method: 'at', error: data.error || 'helper error' };
       }
 
+      // Хелпер сам привязан к адаптеру модема и замерил публичный IP через него.
+      // Если вернул пару old/new — доверяем ему: Chrome ходит в сеть не через модем
+      // (или через прокси) и api.ipify.org может отдать адрес кабеля.
+      if (data && data.oldIp && data.newIp) {
+        const ok = data.newIp !== data.oldIp;
+        if (ok) {
+          console.log(`[Modem${this.settings.slot ?? ''}] IP rotated: ${data.oldIp} -> ${data.newIp}`);
+          return { ok: true, oldIp: data.oldIp, newIp: data.newIp, method: 'at' };
+        }
+        return {
+          ok: false,
+          oldIp: data.oldIp,
+          newIp: data.newIp,
+          method: 'at',
+          error: 'ip_unchanged',
+        };
+      }
+
       const newIp = await this.waitNewIp(oldIp, 90_000);
       const ok = !!newIp && newIp !== oldIp;
       if (!ok) {
