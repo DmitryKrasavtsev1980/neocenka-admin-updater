@@ -1,0 +1,14 @@
+{
+  "name": "modem-at-helper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Локальный HTTP-хелпер смены IP для Huawei E3372 stick mode (AT+CFUN)",
+  "main": "index.js",
+  "scripts": {
+    "a": "node index.js --slot A --com COM3 --port 8891",
+    "b": "node index.js --slot B --com COM4 --port 8892"
+  },
+  "dependencies": {
+    "serialport": "^12.0.0"
+  }
+}

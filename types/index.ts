@@ -123,12 +123,21 @@ export interface Settings {
   dailyCap: number;
   /** Задавать задачу «обновить всё», если очередь пуста */
   autoEnqueue: boolean;
-  /** Адрес веб-интерфейса модема для смены IP при бане */
+  /** Адрес модема: веб-UI HiLink (http://192.168.8.1) или локальный AT-хелпер */
   modemHost: string;
   /** Сменять IP через модем, когда площадка банит */
   modemEnabled: boolean;
-  /** 'dataswitch' — перевыпуск соединения (~30 с), 'reboot' — перезагрузка модема (~90 с) */
-  modemMethod: 'dataswitch' | 'reboot';
+  /**
+   * 'dataswitch' — HiLink, выкл/вкл данных (~30 с);
+   * 'reboot'     — HiLink, перезагрузка модема (~90 с);
+   * 'at'         — stick mode (E3372-325), через локальный AT-хелпер (~30 с).
+   */
+  modemMethod: 'dataswitch' | 'reboot' | 'at';
+  /**
+   * Слот модема (A/B/...): крутим IP только своего модема,
+   * лок на сервере — per-modem, сосед на другом модеме не ждёт.
+   */
+  modemSlot?: string;
 }
 
 /** Устойчивый id этого воркера — для аренды строк в update_queue */

@@ -152,36 +152,39 @@ class ApiClient {
     return data.data;
   }
 
-  // ─── Глобальный лок на смену IP ───────────────────────────
+  // ─── Лок на смену IP ─────────────────────────────────────
   //
-  // Модем один на всех воркеров: пока один крутит IP, у остальных обрываются
-  // запросы и сгорают попытки строк. Поэтому крутит тот, кто первый взял лок.
+  // Пока один воркер крутит IP модема, у остальных на этом же модеме
+  // обрываются запросы и сгорают попытки строк. Лок — per-modem:
+  // воркеры на другом модеме работают, их лок не касается.
 
   /**
    * Попытаться взять лок на смену IP.
    * true — лок наш (или протух и перехвачен), false — его держит сосед.
+   * modem — слот модема (A/B); без него общий лок (один модем).
    */
-  async acquireIpLock(browserId: string): Promise<boolean> {
+  async acquireIpLock(browserId: string, modem?: string): Promise<boolean> {
     const data = await this.request<{ acquired: boolean }>('/update/ip-lock/acquire', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ browser_id: browserId }),
+      body: JSON.stringify({ browser_id: browserId, modem: modem || undefined }),
     });
     return data.acquired === true;
   }
 
   /** Отпустить лок. Чужой лок сервер не трогает — безопасно звать всегда. */
-  async releaseIpLock(browserId: string): Promise<void> {
+  async releaseIpLock(browserId: string, modem?: string): Promise<void> {
     await this.request('/update/ip-lock/release', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ browser_id: browserId }),
+      body: JSON.stringify({ browser_id: browserId, modem: modem || undefined }),
     });
   }
 
   /** Кто сейчас держит лок и сколько ему осталось */
-  async getIpLock(): Promise<IpLockState> {
-    const data = await this.request<{ data: IpLockState }>('/update/ip-lock');
+  async getIpLock(modem?: string): Promise<IpLockState> {
+    const qs = modem ? `?modem=${encodeURIComponent(modem)}` : '';
+    const data = await this.request<{ data: IpLockState }>(`/update/ip-lock${qs}`);
     return data.data;
   }
 

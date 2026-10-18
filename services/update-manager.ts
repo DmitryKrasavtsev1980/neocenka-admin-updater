@@ -43,6 +43,7 @@ const DEFAULT_SETTINGS: Settings = {
   modemHost: DEFAULT_MODEM_SETTINGS.host,
   modemEnabled: true,
   modemMethod: 'dataswitch',
+  modemSlot: '',
 };
 
 /**
@@ -201,6 +202,7 @@ export class UpdateManager {
       host: this.settings.modemHost,
       enabled: this.settings.modemEnabled,
       method: this.settings.modemMethod,
+      slot: this.settings.modemSlot || undefined,
     };
   }
 
@@ -525,7 +527,8 @@ export class UpdateManager {
   private async rotateIpWithLock(): Promise<'rotated' | 'busy' | 'failed'> {
     let acquired = false;
     try {
-      acquired = await apiClient.acquireIpLock(this.browserId);
+      // Лок per-modem: крутить A не мешает воркерам на B.
+      acquired = await apiClient.acquireIpLock(this.browserId, this.settings.modemSlot || undefined);
     } catch (err) {
       console.warn('[Updater] IP lock acquire failed:', err);
       return 'failed';
@@ -544,7 +547,7 @@ export class UpdateManager {
       return 'rotated';
     } finally {
       // Отпускаем всегда: упавший воркер не должен держать лок до TTL (180 с).
-      await apiClient.releaseIpLock(this.browserId).catch(() => {});
+      await apiClient.releaseIpLock(this.browserId, this.settings.modemSlot || undefined).catch(() => {});
     }
   }
 

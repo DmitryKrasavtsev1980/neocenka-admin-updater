@@ -1,28 +1,30 @@
 /**
- * Клиент Huawei HiLink (E3372) — смена IP через веб-интерфейс модема.
+ * Клиент модема — смена IP при бане площадки.
  *
- * Когда площадка банит IP (cian_waf_block, «Доступ ограничен: проблема с IP»),
- * один способ восстановиться — перевыпустить PDP-контекст: мобильный оператор
- * (MegaFon) при этом выдаёт новый внешний адрес.
+ * Два железных режима:
  *
- * Два способа, от быстрого к радикальному:
- *   - 'dataswitch' — выкл/вкл передачу данных (API /api/dialup/mobile-dataswitch),
- *     ~30–40 с, прошивка переподключается и получает новый IP;
- *   - 'reboot' — перезагрузка модема (API /api/device/control, Control=1),
- *     ~60–90 с, тот же эффект, но дольше.
+ * 1) HiLink (E3372 с веб-UI на 192.168.8.1):
+ *    - 'dataswitch' — выкл/вкл передачи данных (API /api/dialup/mobile-dataswitch),
+ *      ~30–40 с, прошивка переподключается и получает новый IP;
+ *    - 'reboot' — перезагрузка модема (API /api/device/control, Control=1),
+ *      ~60–90 с, тот же эффект, но дольше.
+ *    Авторизация не нужна — нужны cookie SessionID и токен из <meta csrf_token>.
  *
- * Авторизация веб-интерфейса для этих методов не нужна — работает «из коробки»
- * на дефолтном E3372. Нужны только cookie SessionID и токен из <meta csrf_token>:
- * без них API отвечает 125003 (token mismatch).
+ * 2) Stick mode (E3372-325 и т.п.): веб-API нет, смена IP только через AT-порт.
+ *    Chrome к COM-портам доступа не имеет, поэтому ставим локальный AT-хелпер
+ *    (tools/modem-at-helper) и шлём ему HTTP на 127.0.0.1:<port>.
+ *    method: 'at', host: 'http://127.0.0.1:8891' (порт модема A) / 8892 (B).
  */
 
 export interface ModemSettings {
-  /** Адрес веб-интерфейса модема */
+  /** Адрес веб-интерфейса HiLink или локального AT-хелпера */
   host: string;
   /** Включить авто-смену IP при бане */
   enabled: boolean;
-  /** Что делать: перевыпустить соединение или перезагрузить модем */
-  method: 'dataswitch' | 'reboot';
+  /** dataswitch/reboot — HiLink; at — stick mode через локальный хелпер */
+  method: 'dataswitch' | 'reboot' | 'at';
+  /** Слот модема (A/B) — для per-modem лока на сервере */
+  slot?: string;
 }
 
 export const DEFAULT_MODEM_SETTINGS: ModemSettings = {
@@ -105,9 +107,14 @@ export class ModemClient {
    * Если настроен быстрый 'dataswitch', но оператор отдал тот же адрес
    * (ip_unchanged) — автоматически эскалируем на 'reboot': тот же результат,
    * но гарантированно новый IP (проверено на MegaFon, 05.10.2026).
+   * В stick mode ('at') эскалации нет — хелпер уже делает CFUN-цикл.
    */
   async rotateIp(): Promise<RotateResult> {
     const method = this.settings.method || 'dataswitch';
+
+    if (method === 'at') {
+      return await this.rotateViaHelper();
+    }
 
     const result = await this.rotateOnce(method);
     if (result.ok || method === 'reboot' || result.error !== 'ip_unchanged') {
@@ -116,6 +123,42 @@ export class ModemClient {
 
     console.warn(`[Modem] ${method} left IP=${result.newIp ?? '?'} — escalating to reboot`);
     return await this.rotateOnce('reboot');
+  }
+
+  /**
+   * Смена IP через локальный AT-хелпер (stick mode, E3372-325).
+   * Хелпер слушает HTTP на 127.0.0.1 и дёргает AT+CFUN=0/1 на своём COM-порту.
+   */
+  private async rotateViaHelper(): Promise<RotateResult> {
+    const oldIp = await this.getPublicIp();
+    console.log(`[Modem${this.settings.slot ?? ''}] rotate via AT helper ${this.host}, current=${oldIp ?? '?'}`);
+
+    try {
+      const res = await fetch(`${this.host}/rotate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slot: this.settings.slot ?? null }),
+      });
+      if (!res.ok) {
+        return { ok: false, oldIp: oldIp ?? undefined, method: 'at', error: `helper http ${res.status}` };
+      }
+      const data = await res.json().catch(() => ({}));
+      if (data && data.ok === false) {
+        return { ok: false, oldIp: oldIp ?? undefined, method: 'at', error: data.error || 'helper error' };
+      }
+
+      const newIp = await this.waitNewIp(oldIp, 90_000);
+      const ok = !!newIp && newIp !== oldIp;
+      if (!ok) {
+        return { ok: false, oldIp: oldIp ?? undefined, newIp: newIp ?? undefined, method: 'at', error: 'ip_unchanged' };
+      }
+      console.log(`[Modem${this.settings.slot ?? ''}] IP rotated: ${oldIp} -> ${newIp}`);
+      return { ok: true, oldIp: oldIp!, newIp, method: 'at' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[Modem] AT helper rotate failed:', msg);
+      return { ok: false, oldIp: oldIp ?? undefined, method: 'at', error: msg };
+    }
   }
 
   private async rotateOnce(method: 'dataswitch' | 'reboot'): Promise<RotateResult> {
