@@ -16,6 +16,8 @@
     "http://*.cian.ru/*",
     "https://54.neocenka.ru/*",
     "http://192.168.8.1/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*",
     "https://api.ipify.org/*"
   ],
   "background": {
