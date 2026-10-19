@@ -29,6 +29,7 @@ export async function checkAvitoAdHtml(url: string): Promise<CheckResult> {
     }
 
     const html = await response.text();
+    const htmlLc = html.toLowerCase();
 
     // Мягкий рейт-лимит Avito: «Доступ ограничен: проблема с IP».
     // Это не бан и не капча в чистом виде — площадка просит переждать
@@ -36,6 +37,11 @@ export async function checkAvitoAdHtml(url: string): Promise<CheckResult> {
     // чтобы воркер замедлился и не сжигал попытки в no_data.
     if (html.includes('Доступ ограничен') || html.includes('проблема с IP')) {
       return { status: 'error', price: null, priceChanged: false, statusChanged: false, error: 'ip_block' };
+    }
+
+    // Капча/антибот на лёгком fetch (hcaptcha iframe, Geetest, «Captcha» в title).
+    if (htmlLc.includes('captcha') || htmlLc.includes('капч') || htmlLc.includes('hcaptcha') || htmlLc.includes('geetest')) {
+      return { status: 'error', price: null, priceChanged: false, statusChanged: false, error: 'captcha' };
     }
 
     // Проверка на закрытое/удалённое объявление — ловим заранее,

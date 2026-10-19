@@ -253,19 +253,21 @@ export async function parseAvitoAd(tabId: number): Promise<ParseResult> {
       let probe = await injectScriptMainWorld(tabId, () => ({
         title: document.title || '',
         text: document.body?.innerText?.substring(0, 800) || '',
+        hasCaptchaFrame: !!document.querySelector('iframe[src*="captcha"], iframe[src*="hcaptcha"], iframe[src*="geetest"], .captcha, [class*="captcha"]'),
       }));
       if (!probe || (!probe.title && !probe.text)) {
         probe = await injectScript(tabId, () => ({
           title: document.title || '',
           text: document.body?.innerText?.substring(0, 800) || '',
+          hasCaptchaFrame: !!document.querySelector('iframe[src*="captcha"], iframe[src*="hcaptcha"], iframe[src*="geetest"], .captcha, [class*="captcha"]'),
         }));
       }
-      const bodyText = probe?.text || '';
-      const title = probe?.title || '';
-      if (bodyText.includes('Доступ ограничен') || bodyText.includes('проблема с IP') || title.includes('Доступ ограничен')) {
+      const bodyText = (probe?.text || '').toLowerCase();
+      const title = (probe?.title || '').toLowerCase();
+      if (bodyText.includes('доступ ограничен') || bodyText.includes('проблема с ip') || title.includes('доступ ограничен')) {
         return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'ip_block' };
       }
-      if (bodyText.includes('капч') || bodyText.includes('captcha') || title.includes('captcha')) {
+      if (bodyText.includes('капч') || bodyText.includes('captcha') || title.includes('captcha') || probe?.hasCaptchaFrame) {
         return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'captcha' };
       }
       if (

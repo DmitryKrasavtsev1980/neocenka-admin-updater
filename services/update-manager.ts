@@ -654,28 +654,32 @@ export class UpdateManager {
       title: document.title || '',
       text: document.body?.innerText?.substring(0, 800) || '',
       url: location.href || '',
+      hasCaptchaFrame: !!document.querySelector('iframe[src*="captcha"], iframe[src*="hcaptcha"], iframe[src*="geetest"], .captcha, [class*="captcha"]'),
     })).catch(() => null);
     if (!probe || (!probe.title && !probe.text)) {
       probe = await injectScript(tabId, () => ({
         title: document.title || '',
         text: document.body?.innerText?.substring(0, 800) || '',
         url: location.href || '',
+        hasCaptchaFrame: !!document.querySelector('iframe[src*="captcha"], iframe[src*="hcaptcha"], iframe[src*="geetest"], .captcha, [class*="captcha"]'),
       })).catch(() => null);
     }
-    const bodyText = probe?.text || '';
-    const title = probe?.title || '';
+    // Cian: title «Captcha - база объявлений ЦИАН» — заглавная C, прежний
+    // регистрозависимый includes('captcha') её пропускал.
+    const bodyText = (probe?.text || '').toLowerCase();
+    const title = (probe?.title || '').toLowerCase();
     const finalUrl = probe?.url || '';
 
     if (this.settings.source === 'avito') {
-      if (bodyText.includes('Доступ ограничен') || bodyText.includes('проблема с IP') || title.includes('Доступ ограничен')) {
+      if (bodyText.includes('доступ ограничен') || bodyText.includes('проблема с ip') || title.includes('доступ ограничен')) {
         return 'ip_block';
       }
     } else {
-      if (bodyText.includes('подозрительный трафик') || bodyText.includes('cian_waf_block') || title === 'Ошибка - Циан') {
+      if (bodyText.includes('подозрительный трафик') || bodyText.includes('cian_waf_block') || title === 'ошибка - циан') {
         return 'waf_block';
       }
     }
-    if (bodyText.includes('капч') || bodyText.includes('captcha') || title.includes('captcha')) {
+    if (bodyText.includes('капч') || bodyText.includes('captcha') || title.includes('captcha') || probe?.hasCaptchaFrame) {
       return 'captcha';
     }
     if (

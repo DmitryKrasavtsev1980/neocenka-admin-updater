@@ -135,11 +135,15 @@ export async function parseCianAd(tabId: number): Promise<ParseResult> {
     const probe = await injectScript(tabId, () => ({
       title: document.title || '',
       text: document.body?.innerText?.substring(0, 800) || '',
+      hasCaptchaFrame: !!document.querySelector('iframe[src*="captcha"], iframe[src*="hcaptcha"], iframe[src*="geetest"], .captcha, [class*="captcha"]'),
     }));
-    const bodyText = probe?.text || '';
-    const title = probe?.title || '';
+    const bodyText = (probe?.text || '').toLowerCase();
+    const title = (probe?.title || '').toLowerCase();
 
-    if (bodyText.includes('капч') || bodyText.includes('captcha')) {
+    // Cian отдаёт капчу с title «Captcha - база объявлений ЦИАН» (заглавная C).
+    // Раньше includes('captcha') был регистрозависимый и такую страницу
+    // не видел — воркер молча жевал капчу как no_data.
+    if (bodyText.includes('капч') || bodyText.includes('captcha') || title.includes('captcha') || probe?.hasCaptchaFrame) {
       return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'captcha' };
     }
     // WAF ЦИАНа (cian_waf_block) — «Обнаружен подозрительный трафик»
