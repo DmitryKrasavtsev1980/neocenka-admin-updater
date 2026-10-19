@@ -135,7 +135,17 @@ export async function parseCianAd(tabId: number): Promise<ParseResult> {
     const probe = await injectScript(tabId, () => ({
       title: document.title || '',
       text: document.body?.innerText?.substring(0, 800) || '',
-      hasCaptchaFrame: !!document.querySelector('iframe[src*="captcha"], iframe[src*="hcaptcha"], iframe[src*="geetest"], .captcha, [class*="captcha"]'),
+      hasCaptchaFrame: (() => {
+        // Только видимые челленджи: площадки держат скрытые captcha-ноды
+        // в DOM и на обычных карточках.
+        const sel = 'iframe[src*="hcaptcha"], iframe[src*="geetest"], iframe[src*="captcha"], .captcha, [class*="captcha"]';
+        for (const el of Array.from(document.querySelectorAll(sel))) {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          const st = getComputedStyle(el as HTMLElement);
+          if (r.width > 40 && r.height > 40 && st.display !== 'none' && st.visibility !== 'hidden') return true;
+        }
+        return false;
+      })(),
     }));
     const bodyText = (probe?.text || '').toLowerCase();
     const title = (probe?.title || '').toLowerCase();

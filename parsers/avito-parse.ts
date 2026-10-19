@@ -253,13 +253,31 @@ export async function parseAvitoAd(tabId: number): Promise<ParseResult> {
       let probe = await injectScriptMainWorld(tabId, () => ({
         title: document.title || '',
         text: document.body?.innerText?.substring(0, 800) || '',
-        hasCaptchaFrame: !!document.querySelector('iframe[src*="captcha"], iframe[src*="hcaptcha"], iframe[src*="geetest"], .captcha, [class*="captcha"]'),
+        hasCaptchaFrame: (() => {
+          // Только ВИДИМЫЕ челленджи: Avito держит скрытые captcha-ноды
+          // в DOM даже на обычной карточке — по ним нельзя считать капчу.
+          const sel = 'iframe[src*="hcaptcha"], iframe[src*="geetest"], iframe[src*="captcha"], .captcha, [class*="captcha"]';
+          for (const el of Array.from(document.querySelectorAll(sel))) {
+            const r = (el as HTMLElement).getBoundingClientRect();
+            const st = getComputedStyle(el as HTMLElement);
+            if (r.width > 40 && r.height > 40 && st.display !== 'none' && st.visibility !== 'hidden') return true;
+          }
+          return false;
+        })(),
       }));
       if (!probe || (!probe.title && !probe.text)) {
         probe = await injectScript(tabId, () => ({
           title: document.title || '',
           text: document.body?.innerText?.substring(0, 800) || '',
-          hasCaptchaFrame: !!document.querySelector('iframe[src*="captcha"], iframe[src*="hcaptcha"], iframe[src*="geetest"], .captcha, [class*="captcha"]'),
+          hasCaptchaFrame: (() => {
+            const sel = 'iframe[src*="hcaptcha"], iframe[src*="geetest"], iframe[src*="captcha"], .captcha, [class*="captcha"]';
+            for (const el of Array.from(document.querySelectorAll(sel))) {
+              const r = (el as HTMLElement).getBoundingClientRect();
+              const st = getComputedStyle(el as HTMLElement);
+              if (r.width > 40 && r.height > 40 && st.display !== 'none' && st.visibility !== 'hidden') return true;
+            }
+            return false;
+          })(),
         }));
       }
       const bodyText = (probe?.text || '').toLowerCase();
