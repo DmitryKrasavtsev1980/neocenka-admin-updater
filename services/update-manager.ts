@@ -19,6 +19,8 @@ import type {
   ParseResult,
   Settings,
   SourceDomain,
+  StreamKey,
+  StreamMix,
 } from '../types';
 import { apiClient } from './api-client';
 import { sleep, keepAliveSleep, retry } from '../utils/delays';
@@ -185,7 +187,13 @@ export class UpdateManager {
   private errors = 0;
   /** Последний живой тик цикла — для обнаружения залипшего воркера */
   private lastActivityAt = Date.now();
-  private onUpdate: ((stats: { processed: number; matched: number; errors: number }) => void) | null = null;
+  private onUpdate: ((stats: {
+    processed: number;
+    matched: number;
+    errors: number;
+    streamMix?: StreamMix;
+    taskNames?: string[];
+  }) => void) | null = null;
   /** До какого момента паузимся из-за WAF/капчи (epoch ms) */
   private cooldownUntil = 0;
   private consecutiveWaf = 0;
@@ -198,6 +206,13 @@ export class UpdateManager {
   /** Последняя ошибка для heartbeat; null = воркер здоров (сервер сбрасывает last_error) */
   private lastError: string | null = null;
   private modemSettings: ModemSettings = DEFAULT_MODEM_SETTINGS;
+  /**
+   * Что крутим прямо сейчас: разбивка текущего батча по потокам
+   * (maintain — поддержание сданной области, deep — подготовка новой,
+   * bulk — сплошная по базе) и имена задач. Для popup.
+   */
+  private streamMix: StreamMix = {};
+  private currentTaskNames: string[] = [];
 
   constructor(settings: Partial<Settings> = {}) {
     this.settings = { ...DEFAULT_SETTINGS, ...settings };
@@ -215,7 +230,13 @@ export class UpdateManager {
     };
   }
 
-  onProgress(callback: (stats: { processed: number; matched: number; errors: number }) => void) {
+  onProgress(callback: (stats: {
+    processed: number;
+    matched: number;
+    errors: number;
+    streamMix?: StreamMix;
+    taskNames?: string[];
+  }) => void) {
     this.onUpdate = callback;
   }
 
@@ -437,6 +458,20 @@ export class UpdateManager {
     }
 
     console.log(`[Updater] Claimed ${ads.length} ads`);
+
+    // Разбивка батча по потокам — для popup («что именно крутим»)
+    const mix: StreamMix = {};
+    const taskNames: string[] = [];
+    for (const ad of ads) {
+      const key = (ad.stream || 'bulk') as StreamKey;
+      mix[key] = (mix[key] ?? 0) + 1;
+      if (ad.task_name && !taskNames.includes(ad.task_name)) {
+        taskNames.push(ad.task_name);
+      }
+    }
+    this.streamMix = mix;
+    this.currentTaskNames = taskNames;
+    this.reportProgress();
 
     // Строки, которые мы сейчас держим. Пока батч в работе, аренду надо
     // продлевать — иначе через 10 минут их отберёт соседний воркер.
@@ -977,6 +1012,8 @@ export class UpdateManager {
         processed: this.processed,
         matched: this.matched,
         errors: this.errors,
+        streamMix: this.streamMix,
+        taskNames: this.currentTaskNames,
       });
     }
   }
@@ -989,6 +1026,8 @@ export class UpdateManager {
       errors: this.errors,
       browserId: this.browserId,
       lastActivityAt: this.lastActivityAt,
+      streamMix: this.streamMix,
+      taskNames: this.currentTaskNames,
     };
   }
 }

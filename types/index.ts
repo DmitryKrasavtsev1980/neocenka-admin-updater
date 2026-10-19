@@ -19,7 +19,21 @@ export interface ClaimedAd {
   price_history: PriceHistoryItem[] | null;
   source: string | null;
   parsed_at: string | null;
+  /** Задача, из которой взята строка */
+  task_id?: number | null;
+  /**
+   * Поток задачи: maintain — поддержание сданной области,
+   * deep — подготовка новой области, bulk — сплошная по базе.
+   */
+  stream?: StreamKey | null;
+  task_name?: string | null;
 }
+
+/** Потоки актуализации (см. UpdateTask::STREAMS на сервере) */
+export type StreamKey = 'maintain' | 'deep' | 'bulk';
+
+/** Сколько строк текущего батча из каждого потока */
+export type StreamMix = Partial<Record<StreamKey, number>>;
 
 // Результат быстрой проверки (фаза CHECK)
 export interface CheckResult {

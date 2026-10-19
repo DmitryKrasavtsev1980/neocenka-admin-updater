@@ -14,9 +14,27 @@ const logEl = document.getElementById('log')!;
 
 // Элементы конфига
 const cfgSource = document.getElementById('cfgSource')!;
+const cfgModem = document.getElementById('cfgModem')!;
+const cfgStreams = document.getElementById('cfgStreams')!;
+const cfgTasks = document.getElementById('cfgTasks')!;
 const cfgBatch = document.getElementById('cfgBatch')!;
 const cfgPoll = document.getElementById('cfgPoll')!;
 const cfgAuto = document.getElementById('cfgAuto')!;
+
+// Потоки актуализации человеческими словами
+const STREAM_LABELS: Record<string, string> = {
+  maintain: 'Поддержание',
+  deep: 'Новая область',
+  bulk: 'Сплошная по базе',
+};
+
+function formatStreams(mix?: Record<string, number>) {
+  if (!mix || Object.keys(mix).length === 0) return '—';
+  return Object.entries(mix)
+    .filter(([, n]) => n > 0)
+    .map(([key, n]) => `${STREAM_LABELS[key] ?? key} ${n}`)
+    .join(' · ');
+}
 
 function addLog(message: string, type: 'info' | 'error' | 'success' = 'info') {
   const entry = document.createElement('div');
@@ -26,7 +44,14 @@ function addLog(message: string, type: 'info' | 'error' | 'success' = 'info') {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-function updateUI(stats: { isRunning: boolean; processed: number; matched: number; errors: number }) {
+function updateUI(stats: {
+  isRunning: boolean;
+  processed: number;
+  matched: number;
+  errors: number;
+  streamMix?: Record<string, number>;
+  taskNames?: string[];
+}) {
   statusDot.className = `status-dot ${stats.isRunning ? 'running' : ''}`;
   statusText.textContent = stats.isRunning ? 'Работает...' : 'Остановлен';
   processedEl.textContent = String(stats.processed);
@@ -34,11 +59,17 @@ function updateUI(stats: { isRunning: boolean; processed: number; matched: numbe
   errorsEl.textContent = String(stats.errors);
   startBtn.disabled = stats.isRunning;
   stopBtn.disabled = !stats.isRunning;
+
+  cfgStreams.textContent = formatStreams(stats.streamMix);
+  cfgTasks.textContent = stats.taskNames && stats.taskNames.length > 0
+    ? stats.taskNames.join('; ')
+    : '—';
 }
 
 function updateConfigInfo(settings: any) {
   if (!settings) return;
   cfgSource.textContent = settings.source === 'cian' ? 'CIAN' : 'Avito';
+  cfgModem.textContent = settings.modemSlot ? `Слот ${settings.modemSlot}` : '—';
   cfgBatch.textContent = String(settings.batchSize ?? '—');
   cfgPoll.textContent = `${settings.pollIntervalSec ?? '—'} с`;
   cfgAuto.textContent = settings.autoEnqueue ? 'да' : 'нет';
@@ -84,6 +115,8 @@ chrome.runtime.onMessage.addListener((message) => {
       processed: message.processed,
       matched: message.matched,
       errors: message.errors,
+      streamMix: message.streamMix,
+      taskNames: message.taskNames,
     });
   }
   if (message.type === 'COMPLETED') {
@@ -92,6 +125,8 @@ chrome.runtime.onMessage.addListener((message) => {
       processed: message.processed,
       matched: message.matched,
       errors: message.errors,
+      streamMix: message.streamMix,
+      taskNames: message.taskNames,
     });
     addLog(`Завершено: ${message.processed} обработано, ${message.matched} обновлено`, 'success');
   }

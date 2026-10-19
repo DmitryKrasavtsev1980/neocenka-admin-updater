@@ -96,6 +96,16 @@ h1 {
   color: #ccc;
 }
 
+.config-row-wrap {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.config-row-wrap span:last-child {
+  text-align: right;
+  word-break: break-word;
+}
+
 .config-label {
   color: #888;
 }
