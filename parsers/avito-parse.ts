@@ -285,7 +285,15 @@ export async function parseAvitoAd(tabId: number): Promise<ParseResult> {
       if (bodyText.includes('доступ ограничен') || bodyText.includes('проблема с ip') || title.includes('доступ ограничен')) {
         return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'ip_block' };
       }
-      if (bodyText.includes('капч') || bodyText.includes('captcha') || title.includes('captcha') || probe?.hasCaptchaFrame) {
+      // Капча: только явные маркеры челленджа. Раньше includes('капч')
+      // ловил скрытые captcha-ноды Avito и давал ложные паузы.
+      const isCaptchaTitle = title.includes('captcha') || title.includes('капч');
+      const isCaptchaText =
+        bodyText.includes('подтвердите, что вы не робот') ||
+        bodyText.includes('пройдите проверку') ||
+        bodyText.includes('решите капчу') ||
+        (bodyText.includes('капч') && bodyText.includes('продолжить'));
+      if (isCaptchaTitle || isCaptchaText || probe?.hasCaptchaFrame) {
         return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'captcha' };
       }
       if (

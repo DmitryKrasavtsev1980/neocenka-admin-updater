@@ -119,6 +119,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Alarms для.periodic checks (если popup закрыт)
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'periodic-check') {
+    // Залипший воркер: isRunning=true, но тишина в цикле > 5 мин.
+    // Раньше будильник видел isRunning и не перезапускал — воркер вис мёртвым
+    // грузом до ручного STOP/START (или loadUnpacked).
+    if (manager?.getStats().isRunning) {
+      const idleMs = Date.now() - (manager.getStats().lastActivityAt || 0);
+      if (idleMs < 5 * 60_000) return;
+      console.warn(`[Updater] Worker stuck (idle ${Math.round(idleMs / 1000)}s) — force restart`);
+      manager.stop();
+      // Ждём unwind (tempoSleep теперь чанками по 20 с — STOP отзывчивый)
+      await new Promise((r) => setTimeout(r, 25_000));
+      if (manager?.getStats().isRunning) {
+        console.warn('[Updater] Worker still running after stop — dropping reference');
+        manager = null;
+      }
+    }
     if (manager?.getStats().isRunning) return;
 
     // Автозапуск если включено. Зовём startWorker напрямую —

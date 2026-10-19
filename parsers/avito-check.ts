@@ -39,8 +39,24 @@ export async function checkAvitoAdHtml(url: string): Promise<CheckResult> {
       return { status: 'error', price: null, priceChanged: false, statusChanged: false, error: 'ip_block' };
     }
 
-    // Капча/антибот на лёгком fetch (hcaptcha iframe, Geetest, «Captcha» в title).
-    if (htmlLc.includes('captcha') || htmlLc.includes('капч') || htmlLc.includes('hcaptcha') || htmlLc.includes('geetest')) {
+    // Капча/антибот на лёгком fetch.
+    // ВАЖНО: Avito держит скрытые captcha-ноды и hcaptcha-скрипты в HTML
+    // КАЖДОЙ страницы — грубый includes('captcha') по всему html давал
+    // ложные срабатывания и останавливал воркер (tempo ×3, пауза).
+    // Сначала ищем маркеры НАСТОЯЩЕЙ страницы капчи, потом — живую карточку.
+    const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+    const pageTitle = (titleMatch?.[1] || '').toLowerCase();
+    const isCaptchaTitle = pageTitle.includes('captcha') || pageTitle.includes('капч');
+    const isCaptchaChallenge =
+      htmlLc.includes('подтвердите, что вы не робот') ||
+      htmlLc.includes('пройдите проверку') ||
+      htmlLc.includes('решите капчу') ||
+      htmlLc.includes('чтобы продолжить') && htmlLc.includes('капч') ||
+      htmlLc.includes('smartcaptcha') ||
+      htmlLc.includes('captcha__wrapper') ||
+      htmlLc.includes('captcha-form') ||
+      htmlLc.includes('grecaptcha.execute') && !html.includes('buyerItem');
+    if (isCaptchaTitle || isCaptchaChallenge) {
       return { status: 'error', price: null, priceChanged: false, statusChanged: false, error: 'captcha' };
     }
 

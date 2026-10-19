@@ -183,6 +183,8 @@ export class UpdateManager {
   private processed = 0;
   private matched = 0;
   private errors = 0;
+  /** Последний живой тик цикла — для обнаружения залипшего воркера */
+  private lastActivityAt = Date.now();
   private onUpdate: ((stats: { processed: number; matched: number; errors: number }) => void) | null = null;
   /** До какого момента паузимся из-за WAF/капчи (epoch ms) */
   private cooldownUntil = 0;
@@ -230,7 +232,15 @@ export class UpdateManager {
       this.browserId = await getBrowserId();
       await this.loadTempo();
 
-      const healthy = await apiClient.healthCheck();
+      // healthCheck с ретраями: reboot-rotate модема даёт 500/timeout на 30–40 с,
+      // а fatal здесь убивал воркер до следующего ручного старта.
+      let healthy = false;
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        healthy = await apiClient.healthCheck().catch(() => false);
+        if (healthy) break;
+        console.warn(`[Updater] healthCheck failed (attempt ${attempt}/5), retrying in 5s...`);
+        await keepAliveSleep(5000);
+      }
       if (!healthy) {
         throw new Error('API server is not available');
       }
@@ -250,6 +260,7 @@ export class UpdateManager {
       console.log(`[Updater] Started as ${this.browserId}, source=${this.settings.source}, tab ${this.tabId}`);
 
       while (!this.shouldStop) {
+        this.lastActivityAt = Date.now();
         await this.waitCooldown();
         if (this.shouldStop) break;
 
@@ -326,7 +337,12 @@ export class UpdateManager {
       console.log('[Updater] Tempo reset to 1.0 after 30 min without WAF');
     }
     const ms = baseMs * this.tempoMultiplier;
-    await keepAliveSleep(useJitter ? this.jitter(ms) : ms);
+    // Чанками с проверкой shouldStop — иначе STOP ждал полный sleep (до 3+ мин).
+    const end = Date.now() + (useJitter ? this.jitter(ms) : ms);
+    while (!this.shouldStop && Date.now() < end) {
+      await keepAliveSleep(Math.min(20_000, end - Date.now()));
+    }
+    this.lastActivityAt = Date.now();
   }
 
   /**
@@ -353,10 +369,19 @@ export class UpdateManager {
       const stored = await chrome.storage.local.get('tempoState');
       const s = stored.tempoState as { multiplier?: number; lastWafAt?: number } | undefined;
       if (s && typeof s.multiplier === 'number') {
-        this.tempoMultiplier = Math.min(3, Math.max(1, s.multiplier));
-        this.lastWafAt = s.lastWafAt ?? 0;
-        if (this.tempoMultiplier > 1) {
-          console.log(`[Updater] Restored tempo multiplier ×${this.tempoMultiplier.toFixed(2)}`);
+        // Не восстанавливаем множитель, если WAF/капча давно не было:
+        // иначе ×3 залипал навсегда (ложная капча → пауза → рестарт → ×3 → …).
+        if (s.lastWafAt && Date.now() - s.lastWafAt > 30 * 60_000) {
+          this.tempoMultiplier = 1;
+          this.lastWafAt = 0;
+          await this.persistTempo();
+          console.log('[Updater] Tempo state expired (no WAF for 30+ min) — reset to 1.0');
+        } else {
+          this.tempoMultiplier = Math.min(3, Math.max(1, s.multiplier));
+          this.lastWafAt = s.lastWafAt ?? 0;
+          if (this.tempoMultiplier > 1) {
+            console.log(`[Updater] Restored tempo multiplier ×${this.tempoMultiplier.toFixed(2)}`);
+          }
         }
       }
     } catch {
@@ -655,11 +680,13 @@ export class UpdateManager {
       text: document.body?.innerText?.substring(0, 800) || '',
       url: location.href || '',
       hasCaptchaFrame: (() => {
+        // Только ВИДИМЫЕ челленджи: Avito держит скрытые captcha-ноды,
+        // [class*="captcha"] без проверки видимости давал ложные срабатывания.
         const sel = 'iframe[src*="hcaptcha"], iframe[src*="geetest"], iframe[src*="captcha"], .captcha, [class*="captcha"]';
         for (const el of Array.from(document.querySelectorAll(sel))) {
           const r = (el as HTMLElement).getBoundingClientRect();
           const st = getComputedStyle(el as HTMLElement);
-          if (r.width > 40 && r.height > 40 && st.display !== 'none' && st.visibility !== 'hidden') return true;
+          if (r.width > 40 && r.height > 40 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0') return true;
         }
         return false;
       })(),
@@ -674,7 +701,7 @@ export class UpdateManager {
           for (const el of Array.from(document.querySelectorAll(sel))) {
             const r = (el as HTMLElement).getBoundingClientRect();
             const st = getComputedStyle(el as HTMLElement);
-            if (r.width > 40 && r.height > 40 && st.display !== 'none' && st.visibility !== 'hidden') return true;
+            if (r.width > 40 && r.height > 40 && st.display !== 'none' && st.visibility !== 'hidden' && st.opacity !== '0') return true;
           }
           return false;
         })(),
@@ -695,7 +722,16 @@ export class UpdateManager {
         return 'waf_block';
       }
     }
-    if (bodyText.includes('капч') || bodyText.includes('captcha') || title.includes('captcha') || probe?.hasCaptchaFrame) {
+    // Капча: только явные маркеры страницы-челленджа.
+    // Раньше bodyText.includes('капч') + [class*="captcha"] ловили скрытые
+    // captcha-ноды Avito и давали ложные паузы ×3.00 на часы.
+    const isCaptchaTitle = title.includes('captcha') || title.includes('капч');
+    const isCaptchaText =
+      bodyText.includes('подтвердите, что вы не робот') ||
+      bodyText.includes('пройдите проверку') ||
+      bodyText.includes('решите капчу') ||
+      (bodyText.includes('капч') && bodyText.includes('продолжить'));
+    if (isCaptchaTitle || isCaptchaText || probe?.hasCaptchaFrame) {
       return 'captcha';
     }
     if (
@@ -952,6 +988,7 @@ export class UpdateManager {
       matched: this.matched,
       errors: this.errors,
       browserId: this.browserId,
+      lastActivityAt: this.lastActivityAt,
     };
   }
 }
