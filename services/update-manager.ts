@@ -44,6 +44,9 @@ const DEFAULT_SETTINGS: Settings = {
   modemEnabled: true,
   modemMethod: 'dataswitch',
   modemSlot: '',
+  // Источник закреплён за профилем: раскладка «модем × площадка» не должна
+  // перетираться серверным assignSource (он не знает про модемы).
+  sourcePinned: true,
 };
 
 /**
@@ -842,6 +845,9 @@ export class UpdateManager {
           // beat() на сервере пишет только не-null значения, поэтому без этой
           // строки сообщение о дневной капче висело бы вечно.
           last_error: this.lastError ?? '',
+          // Слот модема — чтобы сервер/мониторинг видели топологию
+          // «какой браузер через какой модем парсит».
+          modem_slot: this.settings.modemSlot || undefined,
         },
         queueIds
       );
@@ -858,9 +864,15 @@ export class UpdateManager {
    * Применить конфиг с сервера (storage/app/update_config.json).
    * Темп парсинга (checkDelayMs / parseDelayMs / dailyCap) НЕ переопределяется —
    * это защита от бана, всегда из SOURCE_TEMPO.
+   *
+   * source НЕ переопределяется при sourcePinned: раскладка «модем × площадка»
+   * зафиксирована в профиле, а серверный assignSource не знает про модемы и
+   * сваливал два воркера одного IP на одну площадку (двойной темп → ip_block).
    */
   private applyRemoteConfig(config: Record<string, unknown>) {
-    const allowed = ['source', 'batchSize', 'pollIntervalSec', 'autoEnqueue'] as const;
+    const allowed = this.settings.sourcePinned
+      ? (['batchSize', 'pollIntervalSec', 'autoEnqueue'] as const)
+      : (['source', 'batchSize', 'pollIntervalSec', 'autoEnqueue'] as const);
     let changed = false;
     for (const key of allowed) {
       if (config[key] !== undefined && (this.settings as any)[key] !== config[key]) {
@@ -885,7 +897,8 @@ export class UpdateManager {
         chrome.storage.local.set({
           settings: {
             ...(stored || {}),
-            source: this.settings.source,
+            // source пишем только если он не закреплён
+            ...(this.settings.sourcePinned ? {} : { source: this.settings.source }),
             batchSize: this.settings.batchSize,
             pollIntervalSec: this.settings.pollIntervalSec,
             autoEnqueue: this.settings.autoEnqueue,
@@ -894,6 +907,7 @@ export class UpdateManager {
       }).catch(() => {});
       console.log('[Updater] Config updated from server:', {
         source: this.settings.source,
+        pinned: !!this.settings.sourcePinned,
         batchSize: this.settings.batchSize,
         pollIntervalSec: this.settings.pollIntervalSec,
         autoEnqueue: this.settings.autoEnqueue,

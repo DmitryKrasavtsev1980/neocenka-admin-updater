@@ -24,14 +24,56 @@ function readAvitoPageData() {
     const buyerItem = detail.buyerItem;
     if (!buyerItem) return null;
 
+    // Идентификаторы для API истории цены
+    // /web/1/realty/price/history/{itemId}?categoryID=&microcatID=
+    const str = JSON.stringify(buyerItem);
+    const microCategoryId =
+      (JSON.stringify(loaderData).match(/"microCategoryId":(\d+)/) || [])[1] ||
+      (str.match(/"microCategoryId":(\d+)/) || [])[1] ||
+      null;
+
     return {
       buyerItemJson: JSON.stringify(buyerItem),
       url: window.location.href,
       metaPrice: document.querySelector('meta[property="product:price:amount"]')?.getAttribute('content'),
+      itemId: buyerItem.item?.id ?? null,
+      categoryId: buyerItem.item?.categoryId ?? null,
+      microCategoryId,
     };
   } catch {
     return null;
   }
+}
+
+/**
+ * Запрос полной истории цены из API Avito (MAIN world).
+ *
+ * Avito отдаёт записи цены только авторизованному пользователю:
+ *   GET /web/1/realty/price/history/{itemId}?categoryID={cid}&microcatID={mc}&offset=0&limit=40
+ *   → {status:"ok", result:{items:[{date:unix, diff, price}], priceChangeSummaries}}
+ *
+ * Без cookies сервер отвечает 439 + pow_challenge (WAF), поэтому вызывать
+ * только из MAIN world вкладки с активной сессией.
+ */
+function fetchAvitoPriceHistory(itemId: number, categoryId: number, microCategoryId: number) {
+  const url =
+    '/web/1/realty/price/history/' + itemId +
+    '?categoryID=' + categoryId +
+    '&microcatID=' + microCategoryId +
+    '&offset=0&limit=40';
+  return fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' as RequestCredentials })
+    .then((r) => r.text())
+    .then((t) => {
+      try {
+        const data = JSON.parse(t);
+        const items = data?.result?.items;
+        if (!Array.isArray(items)) return { ok: false, items: [] };
+        return { ok: true, items };
+      } catch {
+        return { ok: false, items: [] };
+      }
+    })
+    .catch(() => ({ ok: false, items: [] }));
 }
 
 /**
@@ -248,9 +290,34 @@ export async function parseAvitoAd(tabId: number): Promise<ParseResult> {
       return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'parse_failed' };
     }
 
+    let price_history = parsed.price_history || [];
+
+    // Полная история цены — только из API (hydration отдаёт лишь сводку
+    // {hasIncreased, isNew, recordsCount} без массива records).
+    if (pageData.itemId && pageData.categoryId && pageData.microCategoryId) {
+      const api = await injectScriptMainWorld(
+        tabId,
+        fetchAvitoPriceHistory as unknown as () => { ok: boolean; items: Array<{ date: number; diff?: number; price: number }> },
+        [
+          Number(pageData.itemId),
+          Number(pageData.categoryId),
+          Number(pageData.microCategoryId),
+        ]
+      );
+      if (api?.ok && Array.isArray(api.items) && api.items.length) {
+        const mapped: PriceHistoryItem[] = api.items
+          .filter((rec: { date?: number; price?: number }) => rec && rec.date && rec.price)
+          .map((rec: { date: number; diff?: number; price: number }) => ({
+            date: new Date(rec.date * 1000).toISOString(),
+            price: rec.price,
+          }));
+        if (mapped.length) price_history = mapped;
+      }
+    }
+
     return {
       ...parsed,
-      price_history: parsed.price_history || [],
+      price_history,
     };
   } catch (err) {
     return {

@@ -61,12 +61,29 @@ powershell -ExecutionPolicy Bypass -File C:\Projects\ret\admin-updater\tools\sta
 
 ## Профили Chrome
 
+Топология живёт в **`tools/modem-topology.json`**. Добавил модем — дописал
+секцию `slots[]` и запустил два скрипта, код трогать не нужно:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\Projects\ret\admin-updater\tools\start-modems.ps1
+node C:\Projects\ret\admin-updater\tools\apply-topology.js
+```
+
+`start-modems.ps1` — helper + proxy + Chrome по секциям.
+`apply-topology.js` — прописывает в каждый профиль `source` / `modemSlot` /
+`sourcePinned: true` (серверный assignSource источник больше не перетирает).
+
+Раскладка на 2 модема (как в `modem-topology.json`):
+
 | Профиль | CDP | proxy | модем | площадка |
 |---|---|---|---|---|
-| avito-A | 9222 | `127.0.0.1:8881` | A | avito |
-| cian-A  | 9223 | `127.0.0.1:8881` | A | cian |
-| avito-B | 9224 | `127.0.0.1:8882` | B | avito |
-| cian-B  | 9225 | `127.0.0.1:8882` | B | cian |
+| chrome-debug-updater (avito-A) | 9222 | `127.0.0.1:8881` | A | avito |
+| chrome-debug-updater2 (cian-A) | 9223 | `127.0.0.1:8881` | A | cian |
+| chrome-debug-updater-B-avito | 9224 | `127.0.0.1:8882` | B | avito |
+| chrome-debug-updater-B-cian | 9225 | `127.0.0.1:8882` | B | cian |
+
+Правило: **на каждом IP ровно одна площадка**. Два воркера одного модема на
+одной площадке = двойной темп с одного адреса = флуд-контроль Avito/Cian.
 
 ```powershell
 chrome.exe --remote-debugging-port=9224 ^

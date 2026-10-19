@@ -1,0 +1,60 @@
+{
+  "$comment": [
+    "Топология модемов и браузеров admin-updater.",
+    "Добавил модем — допиши секцию slots[] и запусти:",
+    "  1) tools/start-modems.ps1     (helper + proxy + Chrome по секциям)",
+    "  2) node tools/apply-topology.js  (прописать source/modemSlot в профили)",
+    "Код трогать не нужно. Порт CDP = 9220 + порядковый номер профиля.",
+    "Профиль source закреплён (sourcePinned): серверный assignSource его не перетирает."
+  ],
+  "extensionDist": "C:\\Projects\\ret\\admin-updater\\dist",
+  "chromeExe": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "slots": [
+    {
+      "slot": "A",
+      "label": "beeline +7961***4200",
+      "iface": "192.168.8.103",
+      "proxyPort": 8881,
+      "helperPort": 8891,
+      "profiles": [
+        {
+          "name": "chrome-debug-updater",
+          "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater",
+          "cdpPort": 9222,
+          "source": "avito",
+          "note": "авторизован Avito (аккаунт «Дмитрий»)"
+        },
+        {
+          "name": "chrome-debug-updater2",
+          "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater2",
+          "cdpPort": 9223,
+          "source": "cian",
+          "note": "авторизован Cian"
+        }
+      ]
+    },
+    {
+      "slot": "B",
+      "label": "MegaFon",
+      "iface": "192.168.8.104",
+      "proxyPort": 8882,
+      "helperPort": 8892,
+      "profiles": [
+        {
+          "name": "chrome-debug-updater-B-avito",
+          "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater-B-avito",
+          "cdpPort": 9224,
+          "source": "avito",
+          "note": "аноним"
+        },
+        {
+          "name": "chrome-debug-updater-B-cian",
+          "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater-B-cian",
+          "cdpPort": 9225,
+          "source": "cian",
+          "note": "аноним"
+        }
+      ]
+    }
+  ]
+}

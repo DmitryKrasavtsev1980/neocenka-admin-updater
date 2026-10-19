@@ -9,9 +9,11 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# IP адаптеров модемов (ipconfig, шлюз 192.168.8.1)
-$IFACE_A = '192.168.8.103'   # модем A, MegaFon
-$IFACE_B = '192.168.8.107'   # модем B, beeline
+# IP адаптеров модемов (ipconfig, шлюз 192.168.8.1).
+# После перетыкания хаба DHCP модемов может выдать другой .x — сверяться с:
+#   Get-NetIPAddress -AddressFamily IPv4 | ? { $_.IPAddress -like '192.168.8.*' }
+$IFACE_A = '192.168.8.103'   # модем A, MegaFon (Ethernet 3)
+$IFACE_B = '192.168.8.104'   # модем B, beeline (Ethernet 6, после Keyron HKG007)
 
 $helpers = Join-Path $root 'modem-hilink-helper'
 $proxyDir = Join-Path $root 'modem-proxy'
