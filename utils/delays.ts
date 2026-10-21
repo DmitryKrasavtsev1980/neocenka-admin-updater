@@ -22,7 +22,10 @@ export async function keepAliveSleep(ms: number): Promise<void> {
     const left = end - Date.now();
     await sleep(Math.min(CHUNK, left));
 
-    if (left > CHUNK && typeof chrome !== 'undefined' && chrome.runtime) {
+    // Пингуем ПОСЛЕ каждого сна, а не только при left > CHUNK:
+    // при sleep ровно 20 с (CHUNK) условие left > CHUNK ложно, пинга нет,
+    // и цепочка «20 с сна без extension API» укладывается в idle-таймер MV3.
+    if (typeof chrome !== 'undefined' && chrome.runtime) {
       try {
         chrome.runtime.getPlatformInfo(() => void chrome.runtime.lastError);
       } catch {

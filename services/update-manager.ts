@@ -381,6 +381,7 @@ export class UpdateManager {
    */
   private async parseDelaySleep(baseMs: number) {
     await keepAliveSleep(baseMs);
+    this.lastActivityAt = Date.now();
   }
 
   private async persistTempo() {
@@ -421,6 +422,9 @@ export class UpdateManager {
   /** Ждать, пока истечёт WAF-кулдаун (прерываемо через shouldStop) */
   private async waitCooldown() {
     while (!this.shouldStop && Date.now() < this.cooldownUntil) {
+      // Кулдаун 10–20 мин — без пульса активности будильник (5 мин idle)
+      // решит, что воркер завис, и сожжёт кулдаун через force restart.
+      this.lastActivityAt = Date.now();
       const left = this.cooldownUntil - Date.now();
       await keepAliveSleep(Math.min(left, 30_000));
     }
@@ -486,6 +490,11 @@ export class UpdateManager {
     const inFlight = new Set(ads.map(a => a.queue_id));
 
     for (const ad of ads) {
+      // Пульс активности: без него будильник (1 мин) видит idle > 5 мин
+      // во время длинного processAd (10–17 мин на батч) и убивает in-flight
+      // карточки через force restart — они остаются claimed без complete.
+      this.lastActivityAt = Date.now();
+
       if (this.shouldStop) {
         // возвращаем незакрытые строки, чтобы их подхватил другой воркер
         await apiClient.release(ad.queue_id, this.browserId, 'worker stopped').catch(() => {});
