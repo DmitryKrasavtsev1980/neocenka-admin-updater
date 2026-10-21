@@ -79,7 +79,15 @@ export const SOURCE_TEMPO = {
 const DAILY_KEY = 'dailyUsage';
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  // Локальная дата (YYYY-MM-DD), а не UTC: счётчик должен сбрасываться
+  // в ту же полночь, до которой крутится cooldownUntil в processBatch().
+  // На хосте UTC+7 UTC-дата откатывается на 7 часов раньше — воркеры
+  // простаивали почти все сутки после дневного капа (см. баг 2026-10-20).
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 /** Сколько карточек сегодня уже обработано */
