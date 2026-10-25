@@ -71,8 +71,13 @@ const DEFAULT_SETTINGS: Settings = {
  *   давал шторм ~2400/день и постоянный ip_block.
  */
 export const SOURCE_TEMPO = {
-  avito: { checkDelayMs: 50_000, parseDelayMs: 8_000, dailyCap: 1000 },
-  cian: { checkDelayMs: 65_000, parseDelayMs: 10_000, dailyCap: 1000 },
+  // dailyCap поднят 27.10.2026 с 1000 до 1600/1250: воркеры упирались в кап
+  // и простаивали ~10 ч в сутки при том, что темп (50 с / 65 с) даёт
+  // теоретический предел ~1728 и ~1338. Темп НЕ трогаем — защита от
+  // флуд-контроля именно в паузах. Исторический грабль: кап 2000 при 35 с
+  // давал шторм ~2400/день и постоянный ip_block.
+  avito: { checkDelayMs: 50_000, parseDelayMs: 8_000, dailyCap: 1600 },
+  cian: { checkDelayMs: 65_000, parseDelayMs: 10_000, dailyCap: 1250 },
 } as const satisfies Record<string, { checkDelayMs: number; parseDelayMs: number; dailyCap: number }>;
 
 /** Дневной счётчик обработанных карточек — для `dailyCap` */
