@@ -64,7 +64,7 @@ async function swEval(cdpPort, expression) {
 }
 
 (async () => {
-  const topo = JSON.parse(fs.readFileSync(TOPOLOGY, 'utf8'));
+  const topo = JSON.parse(fs.readFileSync(TOPOLOGY, 'utf8').replace(/^\uFEFF/, ''));
   console.log('Топология:', TOPOLOGY);
   if (DRY) console.log('(dry-run — ничего не пишем)\n');
 

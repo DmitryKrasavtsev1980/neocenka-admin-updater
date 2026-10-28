@@ -1,60 +1,118 @@
-{
-  "$comment": [
-    "Топология модемов и браузеров admin-updater.",
-    "Добавил модем — допиши секцию slots[] и запусти:",
-    "  1) tools/start-modems.ps1     (helper + proxy + Chrome по секциям)",
-    "  2) node tools/apply-topology.js  (прописать source/modemSlot в профили)",
-    "Код трогать не нужно. Порт CDP = 9220 + порядковый номер профиля.",
-    "Профиль source закреплён (sourcePinned): серверный assignSource его не перетирает."
-  ],
-  "extensionDist": "C:\\Projects\\ret\\admin-updater\\dist",
-  "chromeExe": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-  "slots": [
-    {
-      "slot": "A",
-      "label": "beeline +7961***4200",
-      "iface": "192.168.8.103",
-      "proxyPort": 8881,
-      "helperPort": 8891,
-      "profiles": [
+﻿{
+    "$comment": [
+        "РўРѕРїРѕР»РѕРіРёСЏ РјРѕРґРµРјРѕРІ Рё Р±СЂР°СѓР·РµСЂРѕРІ admin-updater (v3, 24.10.2026).",
+        "",
+        "РЎРёРјРєРё СЂР°СЃСЃС‚Р°РІР»РµРЅС‹ С‚Р°Рє (РїСЂРѕРІРµСЂРµРЅРѕ РїРѕ SMS-РёРЅР±РѕРєСЃСѓ Рё IP):",
+        "  СЃР»РѕС‚ A (.105) = MegaFon  вЂ” РўРћР›Р¬РљРћ РёРЅС‚РµСЂРЅРµС‚ РџРљ, РїР°СЂСЃРёРЅРіРѕРІС‹С… РїСЂРѕС„РёР»РµР№ РЅРµС‚",
+        "  СЃР»РѕС‚ B (.108) = Р±РёР»Р°Р№РЅ   вЂ” РїР°СЂСЃРёРЅРі avito + cian",
+        "  СЃР»РѕС‚ C (.100) = Tele2    вЂ” РїР°СЂСЃРёРЅРі avito + cian",
+        "",
+        "вљ пёЏ Р’ СЃС‚Р°СЂС‹С… РІРµСЂСЃРёСЏС… С„Р°Р№Р»Р° A Рё B Р±С‹Р»Рё РїРµСЂРµРїСѓС‚Р°РЅС‹ (СЃС‡РёС‚Р°Р»РѕСЃСЊ С‡С‚Рѕ A = Р±РёР»Р°Р№РЅ).",
+        "",
+        "РљР»СЋС‡ СЃР»РѕС‚Р° вЂ” usbInstanceId. IP РЅРµ С…Р°СЂРґРєРѕРґРёС‚СЃСЏ: РµРіРѕ РЅР°С…РѕРґРёС‚ discover-modems.ps1.",
+        "",
+        "Р—Р°РїСѓСЃРє:  powershell recover.ps1",
+        "РџСЂРѕРІРµСЂРєР°: powershell recover.ps1 -Check",
+        "РћРґРёРЅ РїСЂРѕС„РёР»СЊ: powershell start-profile.ps1 -Name cian-beeline"
+    ],
+    "extensionDist": "C:\\Projects\\ret\\admin-updater\\dist",
+    "chromeExe": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "helperDir": "C:\\Projects\\ret\\admin-updater\\tools\\modem-hilink-helper",
+    "proxyDir": "C:\\Projects\\ret\\admin-updater\\tools\\modem-proxy",
+    "logDir": "C:\\Projects\\ret\\modem-tools",
+    "modemHost": "http://192.168.8.1",
+    "slots": [
         {
-          "name": "chrome-debug-updater",
-          "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater",
-          "cdpPort": 9222,
-          "source": "avito",
-          "note": "авторизован Avito (аккаунт «Дмитрий»)"
+            "slot": "A",
+            "label": "MegaFon вЂ” РєР°РЅР°Р» РёРЅС‚РµСЂРЅРµС‚Р° РџРљ",
+            "usbInstanceId": "USB\\VID_3566&PID_2001&MI_00\\9&1CD8DA63&0&0000",
+            "ifaceAlias": "Ethernet 6",
+            "mac": "02-91-9E-ED-7C-5E",
+            "iface": "192.168.8.105",
+            "proxyPort": 8881,
+            "helperPort": 8891,
+            "authorizedSources": [],
+            "note": "MegaFon. Провод (Ethernet 2) — основной канал ПК, этот модем — запасной + парсинг avito/cian (профили 9228/9229, только при живом проводе).",
+            "profiles": [
+                {
+                    "name": "avito-megafon",
+                    "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater-A-avito",
+                    "cdpPort": 9228,
+                    "source": "avito",
+                    "requiresWired": true,
+                    "note": "парсинг только при живом проводе (requiresWired)"
+                },
+                {
+                    "name": "cian-megafon",
+                    "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater-A-cian",
+                    "cdpPort": 9229,
+                    "source": "cian",
+                    "requiresWired": true,
+                    "note": "парсинг только при живом проводе (requiresWired)"
+                }
+            ],
+            "role": "internet+parsing"
         },
         {
-          "name": "chrome-debug-updater2",
-          "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater2",
-          "cdpPort": 9223,
-          "source": "cian",
-          "note": "авторизован Cian"
-        }
-      ]
-    },
-    {
-      "slot": "B",
-      "label": "MegaFon",
-      "iface": "192.168.8.104",
-      "proxyPort": 8882,
-      "helperPort": 8892,
-      "profiles": [
-        {
-          "name": "chrome-debug-updater-B-avito",
-          "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater-B-avito",
-          "cdpPort": 9224,
-          "source": "avito",
-          "note": "аноним"
+            "slot": "B",
+            "label": "Р±РёР»Р°Р№РЅ +7 961 218-42-00",
+            "usbInstanceId": "USB\\VID_3566&PID_2001&MI_00\\9&16F11654&0&0000",
+            "ifaceAlias": "Ethernet 3",
+            "mac": "1A-A7-F0-EA-03-A8",
+            "iface": "192.168.8.105",
+            "proxyPort": 8882,
+            "helperPort": 8892,
+            "authorizedSources": [
+                "avito",
+                "cian"
+            ],
+            "note": "РЎРёРјРєР° Р±РёР»Р°Р№РЅР°. SMS-РёРЅР±РѕРєСЃ С‡РёС‚Р°РµС‚СЃСЏ, РєРѕРґС‹ Avito/Cian РїСЂРёС…РѕРґСЏС‚ СЃСЋРґР°. вљ пёЏ РјР°Р»Рѕ РґРµРЅРµРі РЅР° Р±Р°Р»Р°РЅСЃРµ.",
+            "profiles": [
+                {
+                    "name": "avito-beeline",
+                    "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater-B-avito",
+                    "cdpPort": 9224,
+                    "source": "avito",
+                    "note": "Р°РІС‚РѕСЂРёР·РѕРІР°РЅ (С‚СЂРµР±СѓРµС‚СЃСЏ liveness)"
+                },
+                {
+                    "name": "cian-beeline",
+                    "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater-B-cian",
+                    "cdpPort": 9225,
+                    "source": "cian",
+                    "note": "Р°РІС‚РѕСЂРёР·РѕРІР°РЅ"
+                }
+            ],
+            "role": "parsing"
         },
         {
-          "name": "chrome-debug-updater-B-cian",
-          "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater-B-cian",
-          "cdpPort": 9225,
-          "source": "cian",
-          "note": "аноним"
+            "slot": "C",
+            "label": "Tele2 (РЅРѕРІР°СЏ СЃРёРјРєР°)",
+            "usbInstanceId": "USB\\VID_12D1&PID_14DC&MI_00\\8&31B61C6&0&0000",
+            "ifaceAlias": "Ethernet 8",
+            "mac": "0C-5B-8F-27-9A-64",
+            "iface": "192.168.8.100",
+            "proxyPort": 8883,
+            "helperPort": 8893,
+            "authorizedSources": [],
+            "note": "Tele2. вљ пёЏ web API РјРѕРґРµРјР° РЅРµ РѕС‚РІРµС‡Р°РµС‚ вЂ” SMS РїСЂРѕС‡РёС‚Р°С‚СЊ РЅРµР»СЊР·СЏ, РїРѕРєР° РјРѕРґРµРј РЅРµ РїРµСЂРµР·Р°РіСЂСѓР·РёС‚СЊ.",
+            "profiles": [
+                {
+                    "name": "avito-tele2",
+                    "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater-C-avito",
+                    "cdpPort": 9226,
+                    "source": "avito",
+                    "note": "С‚СЂРµР±СѓРµС‚СЃСЏ liveness"
+                },
+                {
+                    "name": "cian-tele2",
+                    "userDataDir": "C:\\Projects\\ret\\chrome-debug-updater-C-cian",
+                    "cdpPort": 9227,
+                    "source": "cian",
+                    "note": "РЅРµ Р°РІС‚РѕСЂРёР·РѕРІР°РЅ"
+                }
+            ],
+            "role": "parsing"
         }
-      ]
-    }
-  ]
+    ]
 }

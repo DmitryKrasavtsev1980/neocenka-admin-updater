@@ -1,4 +1,4 @@
-# Поднять helper'ы, прокси и Chrome-профили по tools/modem-topology.json.
+﻿# Поднять helper'ы, прокси и Chrome-профили по tools/modem-topology.json.
 #
 # Запускать из Windows PowerShell (НЕ из WSL):
 #   powershell -ExecutionPolicy Bypass -File C:\Projects\ret\admin-updater\tools\start-modems.ps1

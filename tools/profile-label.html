@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>профиль…</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh; display: grid; place-items: center;
+    background: #0f172a; color: #e2e8f0; padding: 24px;
+  }
+  .card {
+    width: min(720px, 100%);
+    background: #1e293b; border-radius: 16px; padding: 32px;
+    box-shadow: 0 20px 50px rgba(0,0,0,.35);
+    border: 1px solid #334155;
+  }
+  .badge {
+    display: inline-block; padding: 6px 14px; border-radius: 999px;
+    font-size: 13px; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; margin-bottom: 18px;
+  }
+  .avito { background: #ff5722; color: #fff; }
+  .cian  { background: #04a3e3; color: #fff; }
+  h1 { font-size: 32px; line-height: 1.15; margin-bottom: 8px; }
+  .sub { color: #94a3b8; font-size: 16px; margin-bottom: 24px; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  td { padding: 11px 0; border-bottom: 1px solid #334155; vertical-align: top; }
+  td:first-child { color: #94a3b8; width: 42%; padding-right: 16px; }
+  td:last-child { color: #f1f5f9; font-weight: 500; word-break: break-all; }
+  tr:last-child td { border-bottom: 0; }
+  .note {
+    margin-top: 22px; padding: 14px 16px; border-radius: 10px;
+    background: #0f172a; border-left: 3px solid #38bdf8;
+    color: #cbd5e1; font-size: 14px; line-height: 1.55;
+  }
+  .warn { border-left-color: #f59e0b; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="badge" id="badge">…</div>
+  <h1 id="title">…</h1>
+  <div class="sub" id="sub">…</div>
+  <table>
+    <tr><td>Сайт для парсинга</td><td id="source">…</td></tr>
+    <tr><td>Модем / канал</td><td id="slot">…</td></tr>
+    <tr><td>Прокси (трафик)</td><td id="proxy">…</td></tr>
+    <tr><td>CDP-порт</td><td id="cdp">…</td></tr>
+    <tr><td>Профиль Chrome</td><td id="dir">…</td></tr>
+    <tr><td>Авторизация</td><td id="auth">…</td></tr>
+  </table>
+  <div class="note" id="note"></div>
+</div>
+
+<script>
+// Все параметры приходят в hash: #name=..&source=..&slot=..&proxy=..&cdp=..&dir=..&auth=..
+const params = Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
+const get = (k, d = '—') => params[k] || d;
+
+const source = get('source', '?');
+const isAvito = String(source).toLowerCase() === 'avito';
+
+document.getElementById('badge').className = 'badge ' + (isAvito ? 'avito' : 'cian');
+document.getElementById('badge').textContent = isAvito ? 'AVITO' : 'CIAN';
+
+const name = get('name', 'профиль');
+document.getElementById('title').textContent = name;
+document.title = name + (isAvito ? ' → AVITO' : ' → CIAN');
+
+document.getElementById('sub').textContent =
+  isAvito
+    ? 'Это окно должно открывать avito.ru. Если видишь здесь другое — профиль перепутан.'
+    : 'Это окно должно открывать cian.ru. Если видишь здесь другое — профиль перепутан.';
+
+document.getElementById('source').textContent = isAvito ? 'avito.ru' : 'cian.ru';
+document.getElementById('slot').textContent = get('slot');
+document.getElementById('proxy').textContent = get('proxy');
+document.getElementById('cdp').textContent = get('cdp');
+document.getElementById('dir').textContent = get('dir');
+
+const auth = get('auth', 'нет');
+const authEl = document.getElementById('auth');
+authEl.textContent = auth;
+if (auth.toLowerCase().startsWith('нет')) {
+  authEl.style.color = '#fbbf24';
+  document.getElementById('note').className = 'note warn';
+  document.getElementById('note').innerHTML =
+    '<b>Не авторизован.</b> Анонимные профили Avito банит быстрее. ' +
+    'Зайди на сайт и залогинься — cookies сохранятся в этот профиль и переживут перезагрузку.';
+} else {
+  document.getElementById('note').innerHTML =
+    '<b>Авторизован:</b> ' + auth + '. Сессия хранится в профиле — не пересоздавать каталог.';
+}
+</script>
+</body>
+</html>
