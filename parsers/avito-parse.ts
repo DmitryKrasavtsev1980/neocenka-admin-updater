@@ -280,8 +280,11 @@ export async function parseAvitoAd(tabId: number): Promise<ParseResult> {
           })(),
         }));
       }
-      const bodyText = (probe?.text || '').toLowerCase();
-      const title = (probe?.title || '').toLowerCase();
+      // \xa0 → пробел: «Объявление не␣посмотреть» с неразрывным пробелом
+      // не матчился маркером и мёртвая карточка уходила в no_data.
+      const norm = (s: string) => s.toLowerCase().replace(/[   ]/g, ' ');
+      const bodyText = norm(probe?.text || '');
+      const title = norm(probe?.title || '');
       if (bodyText.includes('доступ ограничен') || bodyText.includes('проблема с ip') || title.includes('доступ ограничен')) {
         return { status: 'error', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null, error: 'ip_block' };
       }
@@ -298,6 +301,7 @@ export async function parseAvitoAd(tabId: number): Promise<ParseResult> {
       }
       if (
         bodyText.includes('не найдено') ||
+        bodyText.includes('не найдена') ||
         bodyText.includes('страница не найдена') ||
         bodyText.includes('объявление удалено') ||
         bodyText.includes('объявление закрыто') ||
@@ -305,8 +309,11 @@ export async function parseAvitoAd(tabId: number): Promise<ParseResult> {
         bodyText.includes('объявление истекло') ||
         bodyText.includes('объявление не посмотреть') ||
         bodyText.includes('объявление не найдено') ||
+        bodyText.includes('пользователь его удалил') ||
+        bodyText.includes('перейти к поиску') ||
         title.includes('404') ||
-        title.includes('не найдено')
+        title.includes('не найдено') ||
+        title.includes('не найдена')
       ) {
         return { status: 'archived', price: null, price_per_meter: null, photos: [], price_history: [], seller_name: null, seller_type: null, updated: null };
       }

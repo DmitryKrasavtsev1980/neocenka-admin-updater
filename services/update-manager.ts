@@ -766,8 +766,11 @@ export class UpdateManager {
     }
     // Cian: title «Captcha - база объявлений ЦИАН» — заглавная C, прежний
     // регистрозависимый includes('captcha') её пропускал.
-    const bodyText = (probe?.text || '').toLowerCase();
-    const title = (probe?.title || '').toLowerCase();
+    // \xa0/узкие пробелы → обычный: Avito пишет «Объявление не␣посмотреть»
+    // с неразрывным пробелом, и маркеры по обычному пробелу её не ловили.
+    const norm = (s: string) => s.toLowerCase().replace(/[   ]/g, ' ');
+    const bodyText = norm(probe?.text || '');
+    const title = norm(probe?.title || '');
     const finalUrl = probe?.url || '';
 
     if (this.settings.source === 'avito') {
@@ -793,6 +796,7 @@ export class UpdateManager {
     }
     if (
       bodyText.includes('не найдено') ||
+      bodyText.includes('не найдена') ||
       bodyText.includes('страница не найдена') ||
       bodyText.includes('объявление удалено') ||
       bodyText.includes('объявление закрыто') ||
@@ -800,8 +804,14 @@ export class UpdateManager {
       bodyText.includes('объявление истекло') ||
       bodyText.includes('объявление не посмотреть') ||
       bodyText.includes('объявление не найдено') ||
+      // Заглушка удалённой карточки: «Объявление не посмотреть. Пользователь
+      // его удалил. Перейти к поиску». В фоновых вкладках title «Ошибка 404»
+      // не рендерится (клиентский JS заморожен), текст заглушки — в SSR-DOM.
+      bodyText.includes('пользователь его удалил') ||
+      bodyText.includes('перейти к поиску') ||
       title.includes('404') ||
-      title.includes('не найдено')
+      title.includes('не найдено') ||
+      title.includes('не найдена')
     ) {
       return 'archived';
     }
@@ -820,6 +830,17 @@ export class UpdateManager {
         finalUrl.includes('?f=') ||
         /^https?:\/\/(?:www\.)?avito\.ru\/?$/.test(finalUrl) ||
         (this.settings.source === 'avito' && !finalId && expectedId)
+      ) {
+        return 'archived';
+      }
+      // Страница поиска Avito вместо карточки (…/kvartiry/prodam/
+      // 2-komnatnye-ASgBAgICAkSSA8YQygiCWQ) — Avito увёл на выдачу,
+      // значит карточка удалена. В URL настоящей карточки /prodam/ не бывает.
+      if (
+        this.settings.source === 'avito' &&
+        (/\/(prodam|kupit|sdam|snimu|sdayu|arenda)\//.test(finalUrl) ||
+          finalUrl.toLowerCase().includes('-asgbagica') ||
+          finalUrl.includes('on-map'))
       ) {
         return 'archived';
       }

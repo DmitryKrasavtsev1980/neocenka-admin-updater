@@ -19,11 +19,18 @@ export async function checkAvitoAdHtml(url: string): Promise<CheckResult> {
       return { status: 'archived', price: null, priceChanged: false, statusChanged: true };
     }
 
-    // Редирект на другое объявление
+    // Редирект на другое объявление или на выдачу поиска — карточка мертва
     if (response.url !== url) {
       const origId = url.match(/\/(\d{10,})/)?.[1];
       const newId = response.url.match(/\/(\d{10,})/)?.[1];
-      if (origId && newId && origId !== newId) {
+      if (origId && newId !== origId) {
+        return { status: 'archived', price: null, priceChanged: false, statusChanged: true };
+      }
+      if (
+        /\/(prodam|kupit|sdam|snimu|sdayu|arenda)\//.test(response.url) ||
+        response.url.toLowerCase().includes('-asgbagica') ||
+        response.url.includes('on-map')
+      ) {
         return { status: 'archived', price: null, priceChanged: false, statusChanged: true };
       }
     }
@@ -61,16 +68,21 @@ export async function checkAvitoAdHtml(url: string): Promise<CheckResult> {
     }
 
     // Проверка на закрытое/удалённое объявление — ловим заранее,
-    // чтобы не открывать вкладку и не сжигать parseDelay на мёртвой карточке
+    // чтобы не открывать вкладку и не сжигать parseDelay на мёртвой карточке.
+    // \xa0/&nbsp; → пробел: «Объявление не␣посмотреть» с неразрывным пробелом
+    // не матчился маркером по обычному пробелу.
+    const htmlNorm = htmlLc.replace(/&nbsp;|&#160;|[   ]/g, ' ');
     if (
-      html.includes('Объявление закрыто') ||
+      htmlNorm.includes('объявление закрыто') ||
       html.includes('closedItem') ||
-      html.includes('не найдено') ||
-      html.includes('страница не найдена') ||
-      html.includes('объявление удалено') ||
-      html.includes('снято с публикации') ||
-      html.includes('Объявление истекло') ||
-      html.includes('объявление не посмотреть') ||
+      htmlNorm.includes('не найдено') ||
+      htmlNorm.includes('не найдена') ||
+      htmlNorm.includes('страница не найдена') ||
+      htmlNorm.includes('объявление удалено') ||
+      htmlNorm.includes('снято с публикации') ||
+      htmlNorm.includes('объявление истекло') ||
+      htmlNorm.includes('объявление не посмотреть') ||
+      htmlNorm.includes('пользователь его удалил') ||
       html.includes('"isDeleted":true')
     ) {
       return { status: 'archived', price: null, priceChanged: false, statusChanged: true };
