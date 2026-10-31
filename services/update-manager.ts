@@ -80,6 +80,37 @@ export const SOURCE_TEMPO = {
   cian: { checkDelayMs: 65_000, parseDelayMs: 10_000, dailyCap: 1250 },
 } as const satisfies Record<string, { checkDelayMs: number; parseDelayMs: number; dailyCap: number }>;
 
+/**
+ * Per-slot надстройки темпа «площадка × слот модема». Только вниз (медленнее
+ * базы) — разгонять темп нельзя, а замедлить грязный IP можно.
+ *
+ * 2026-10-31: avito на Tele2 (слот C) ловит циклический флуд-контроль
+ * («Доступ ограничен: проблема с IP»): strike 1→16 за утро при штатных 50 с,
+ * при том что avito-билайн (слот B) при тех же 50 с чист. Замедляем ТОЛЬКО
+ * C-полосу авито до 75 с; билайн остаётся на 50 с.
+ */
+export const SLOT_TEMPO_OVERRIDES: Record<
+  string,
+  Partial<Record<string, { checkDelayMs?: number; parseDelayMs?: number; dailyCap?: number }>>
+> = {
+  C: { avito: { checkDelayMs: 75_000 } },
+};
+
+/** Итоговый темп: базовый SOURCE_TEMPO + надстройка слота. */
+export function getTempo(source: string, slot?: string): {
+  checkDelayMs: number;
+  parseDelayMs: number;
+  dailyCap: number;
+} {
+  const tempoMap = SOURCE_TEMPO as Record<
+    string,
+    { checkDelayMs: number; parseDelayMs: number; dailyCap: number }
+  >;
+  const base = tempoMap[source] ?? SOURCE_TEMPO.avito;
+  const override = slot ? SLOT_TEMPO_OVERRIDES[slot]?.[source] : undefined;
+  return { ...base, ...(override || {}) };
+}
+
 /** Дневной счётчик обработанных карточек — для `dailyCap` */
 const DAILY_KEY = 'dailyUsage';
 
@@ -229,12 +260,17 @@ export class UpdateManager {
 
   constructor(settings: Partial<Settings> = {}) {
     this.settings = { ...DEFAULT_SETTINGS, ...settings };
-    // Темп — всегда из SOURCE_TEMPO, настройками не переопределяется:
-    // скорость — вопрос бана IP, а не удобства.
-    const tempo = SOURCE_TEMPO[this.settings.source] ?? SOURCE_TEMPO.avito;
+    // Темп — всегда из SOURCE_TEMPO (+ надстройка слота), настройками не
+    // переопределяется: скорость — вопрос бана IP, а не удобства.
+    const tempo = getTempo(this.settings.source, this.settings.modemSlot);
     this.settings.checkDelayMs = tempo.checkDelayMs;
     this.settings.parseDelayMs = tempo.parseDelayMs;
     this.settings.dailyCap = tempo.dailyCap;
+    console.log(
+      `[Updater] Tempo ${this.settings.source}` +
+        (this.settings.modemSlot ? ` × slot ${this.settings.modemSlot}` : '') +
+        ` → checkDelay ${Math.round(tempo.checkDelayMs / 1000)}s, dailyCap ${tempo.dailyCap}`
+    );
     this.modemSettings = {
       host: this.settings.modemHost,
       enabled: this.settings.modemEnabled,
@@ -603,9 +639,14 @@ export class UpdateManager {
           }
           inFlight.clear();
 
-          // Флуд-контроль Avito снимается за 10–20 минут тишины.
-          // Раньше 2–10 мин — воркер возвращался слишком рано и нарывался снова.
-          const backoffMin = Math.min(20, 10 + 5 * this.consecutiveWaf);
+          // Флуд-контроль Avito снимается за тишину.
+          // Раньше 2–10 мин — воркер возвращался слишком рано и нарывался снова;
+          // затем 10–20 мин — для Tele2 всё равно мало: strike рос 1→16 за утро
+          // 31.10, воркер возвращался в ещё горящее окно. Эскалация по strike:
+          // 10 / 20 / 40 / 60 мин (strike сбрасывается успешной карточкой).
+          const backoffSteps = [10, 20, 40, 60];
+          const backoffMin =
+            backoffSteps[Math.min(this.consecutiveWaf - 1, backoffSteps.length - 1)] ?? 60;
           this.cooldownUntil = Date.now() + backoffMin * 60_000;
           console.warn(
             `[Updater] ip_block — strike ${this.consecutiveWaf}, tempo ×${this.tempoMultiplier.toFixed(2)}, pausing ${backoffMin} min`
@@ -1016,7 +1057,7 @@ export class UpdateManager {
     }
     if (changed) {
       // Перезаписываем задержки из SOURCE_TEMPO (страховка)
-      const tempo = SOURCE_TEMPO[this.settings.source] ?? SOURCE_TEMPO.avito;
+      const tempo = getTempo(this.settings.source, this.settings.modemSlot);
       this.settings.checkDelayMs = tempo.checkDelayMs;
       this.settings.parseDelayMs = tempo.parseDelayMs;
       this.settings.dailyCap = tempo.dailyCap;
