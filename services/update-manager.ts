@@ -30,6 +30,7 @@ import { parseCianAd } from '../parsers/cian-parse';
 import { checkAvitoAdHtml } from '../parsers/avito-check';
 import { checkCianAdHtml } from '../parsers/cian-check';
 import { ModemClient, DEFAULT_MODEM_SETTINGS, type ModemSettings } from './modem-client';
+import { checkSourceLogin } from '../utils/login-check';
 
 export const DEFAULT_API_URL = 'https://54.neocenka.ru/api';
 
@@ -472,6 +473,32 @@ export class UpdateManager {
   }
 
   /**
+   * Ждать, пока пользователь залогинится в Avito (cookie auth появится).
+   * Avito без входа режет анонимный трафик флуд-контролем — долбить его
+   * дальше бессмысленно. Проверяем логин раз в 2 мин, heartbeat шлём,
+   * чтобы сервер видел статус NOT_LOGGED_IN.
+   */
+  private async waitForLogin() {
+    while (!this.shouldStop) {
+      this.lastActivityAt = Date.now();
+      await this.sendHeartbeat();
+      // Пульс активности + сон чанками — STOP отзывчивый, будильник не
+      // считает воркер зависшим (как в waitCooldown).
+      for (let i = 0; i < 4; i++) {
+        if (this.shouldStop) return;
+        this.lastActivityAt = Date.now();
+        await keepAliveSleep(30_000);
+      }
+      const login = await checkSourceLogin(this.settings.source);
+      if (login !== 'out') {
+        console.log('[Updater] Login restored — resuming');
+        return;
+      }
+      console.log('[Updater] Still not logged in — waiting');
+    }
+  }
+
+  /**
    * Взять порцию в аренду, распарсить, закрыть строки очереди.
    * Возвращает число обработанных строк.
    */
@@ -638,6 +665,24 @@ export class UpdateManager {
             await apiClient.release(rest, this.browserId, 'paused: ip_block').catch(() => {});
           }
           inFlight.clear();
+
+          // Проверка логина при блокировке по IP: Avito жёстче душит
+          // анонимный трафик — без входа в аккаунт ip_block повторяется
+          // циклом (31.10: avito-Tele2 без логина, strike 1→16 за утро,
+          // при том что avito-билайн с логином при тех же 50 с чист).
+          // Не залогинен — не долбим площадку дальше, ждём входа.
+          const login = await checkSourceLogin(this.settings.source);
+          if (login === 'out') {
+            this.lastError = 'ip_block + NOT_LOGGED_IN (нет входа в Avito — войдите в аккаунт)';
+            console.warn(
+              '[Updater] ip_block + нет входа в Avito — воркер встаёт до восстановления логина'
+            );
+            await this.waitForLogin();
+            if (this.shouldStop) break;
+            // Вход вернулся: короткая пауза, IP-то ещё мог остаться грязным
+            this.cooldownUntil = Date.now() + 2 * 60_000;
+            break;
+          }
 
           // Флуд-контроль Avito снимается за тишину.
           // Раньше 2–10 мин — воркер возвращался слишком рано и нарывался снова;
