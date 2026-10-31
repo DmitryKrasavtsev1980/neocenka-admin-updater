@@ -364,26 +364,28 @@ export class UpdateManager {
   }
 
   /**
-   * Закрыть вкладки площадки, оставшиеся от прошлого запуска.
+   * Закрыть лишние вкладки профиля.
    *
-   * После chrome.runtime.reload() / падения SW вкладки avito/cian не
-   * закрываются сами и копятся (видели по 3 штуки вместо 1). Popup и
-   * chrome:// не трогаем — только домен текущей площадки.
+   * Штатно в профиле живут только две вкладки: рабочая (this.tabId) и метка
+   * profile-label.html. Вкладки копятся после chrome.runtime.reload() /
+   * падения SW (avito/cian по 3 штуки) и от чужих скриптов (rotate/redial
+   * оставляют вкладки модема 192.168.8.1). Закрываем всё, кроме рабочей
+   * вкладки, метки, popup расширения и системных страниц.
    */
   private async cleanupStaleTabs() {
     try {
-      const domain = SOURCE_DOMAIN[this.settings.source];
       const tabs = await chrome.tabs.query({});
       let closed = 0;
       for (const tab of tabs) {
         if (!tab.id || tab.id === this.tabId) continue;
         const url = tab.url || '';
-        if (!url.includes(domain)) continue;
+        if (url.includes('profile-label.html')) continue;
+        if (/^(chrome|chrome-extension|devtools|about):/.test(url)) continue;
         await closeTab(tab.id).catch(() => {});
         closed++;
       }
       if (closed > 0) {
-        console.log(`[Updater] Closed ${closed} stale ${domain} tab(s)`);
+        console.log(`[Updater] Closed ${closed} stale tab(s)`);
       }
     } catch (err) {
       console.warn('[Updater] cleanupStaleTabs failed:', err);
