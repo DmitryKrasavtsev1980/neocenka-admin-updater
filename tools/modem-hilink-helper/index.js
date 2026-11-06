@@ -116,13 +116,18 @@ function collectCookies(prevCookie, setCookieHeaders) {
 
 async function modemSession() {
   const t = Date.now();
-  const res = await request(`${MODEM_HOST}/?_=${t}`, {
-    headers: { Accept: 'text/html,*/*' },
-  });
-  const cookie = collectCookies('', res.headers['set-cookie']);
-  const tokens = [...res.body.matchAll(/csrf_token"\s+content="([^"]+)"/g)].map((m) => m[1]);
-  if (!tokens.length) throw new Error(`no csrf token in modem page (http ${res.status})`);
-  return { token: tokens[0], cookie };
+  // Корень '/' у части прошивок HiLink отдаёт 404 с пустым телом (без csrf);
+  // рабочая страница с csrf_token — /html/home.html. Пробуем оба пути.
+  const paths = [`${MODEM_HOST}/?_=${t}`, `${MODEM_HOST}/html/home.html?_=${t}`];
+  let lastStatus = 0;
+  for (const url of paths) {
+    const res = await request(url, { headers: { Accept: 'text/html,*/*' } });
+    lastStatus = res.status;
+    const cookie = collectCookies('', res.headers['set-cookie']);
+    const tokens = [...res.body.matchAll(/csrf_token"\s+content="([^"]+)"/g)].map((m) => m[1]);
+    if (tokens.length) return { token: tokens[0], cookie };
+  }
+  throw new Error(`no csrf token in modem page (http ${lastStatus})`);
 }
 
 async function modemPost(path, xml, token, cookie) {

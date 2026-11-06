@@ -74,10 +74,12 @@ const DEFAULT_SETTINGS: Settings = {
 export const SOURCE_TEMPO = {
   // dailyCap поднят 27.10.2026 с 1000 до 1600/1250: воркеры упирались в кап
   // и простаивали ~10 ч в сутки при том, что темп (50 с / 65 с) даёт
-  // теоретический предел ~1728 и ~1338. Темп НЕ трогаем — защита от
-  // флуд-контроля именно в паузах. Исторический грабль: кап 2000 при 35 с
+  // теоретический предел ~1728 и ~1338. Исторический грабль: кап 2000 при 35 с
   // давал шторм ~2400/день и постоянный ip_block.
-  avito: { checkDelayMs: 50_000, parseDelayMs: 8_000, dailyCap: 1600 },
+  // 2026-11-01: avito checkDelay 50→80 с по решению пользователя — частые
+  // ip_block (флуд-контроль) на всех трёх avito-полосах; цель — убрать
+  // циклы strike→backoff, суммарно получить больше карточек за счёт стабильности.
+  avito: { checkDelayMs: 80_000, parseDelayMs: 8_000, dailyCap: 1600 },
   cian: { checkDelayMs: 65_000, parseDelayMs: 10_000, dailyCap: 1250 },
 } as const satisfies Record<string, { checkDelayMs: number; parseDelayMs: number; dailyCap: number }>;
 
@@ -89,12 +91,14 @@ export const SOURCE_TEMPO = {
  * («Доступ ограничен: проблема с IP»): strike 1→16 за утро при штатных 50 с,
  * при том что avito-билайн (слот B) при тех же 50 с чист. Замедляем ТОЛЬКО
  * C-полосу авито до 75 с; билайн остаётся на 50 с.
+ * 2026-11-01: база стала 80 с — C поднят до 105 с (дельта +25 с над базой
+ * сохранена, инвариант «override только медленнее базы»).
  */
 export const SLOT_TEMPO_OVERRIDES: Record<
   string,
   Partial<Record<string, { checkDelayMs?: number; parseDelayMs?: number; dailyCap?: number }>>
 > = {
-  C: { avito: { checkDelayMs: 75_000 } },
+  C: { avito: { checkDelayMs: 105_000 } },
 };
 
 /** Итоговый темп: базовый SOURCE_TEMPO + надстройка слота. */
@@ -334,6 +338,12 @@ export class UpdateManager {
         this.lastActivityAt = Date.now();
         await this.waitCooldown();
         if (this.shouldStop) break;
+
+        // Уборка лишних вкладок на каждом круге, а не только при старте:
+        // вкладки копятся во время работы (после гибели SW finally не успевает
+        // закрыть вкладку, force-restart будильника плодит параллельные
+        // менеджеры). Штатно в профиле живут рабочая вкладка и метка.
+        await this.cleanupStaleTabs();
 
         const claimed = await this.processBatch();
         if (!this.shouldStop && claimed > 0 && Date.now() >= this.cooldownUntil) {
@@ -791,6 +801,11 @@ export class UpdateManager {
    * и все карточки под полный парс уходят в ошибку до перезапуска воркера.
    */
   private async ensureTab(): Promise<number | null> {
+    // Останавливаемся — новую вкладку НЕ создаём. Иначе зомби-менеджер
+    // (после force-restart будильника, когда старый ещё не развернулся),
+    // проснувшись, пересоздавал вкладку поверх уборки нового менеджера
+    // и вкладки avito/cian копились десятками.
+    if (this.shouldStop) return null;
     const baseUrl = this.settings.source === 'avito' ? 'https://www.avito.ru/' : 'https://www.cian.ru/';
     if (this.tabId !== null) {
       try {
