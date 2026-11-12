@@ -5,6 +5,39 @@
 
 import type { ParseResult, PriceHistoryItem } from '../types';
 import { injectScript, injectScriptMainWorld } from '../utils/tab-manager';
+import { mapRenovationLabel } from '../utils/renovation';
+
+/**
+ * Поиск типа ремонта в hydration (MVP-4, admin#37).
+ *
+ * Avito держит его в блоке «О квартире»: массив объектов
+ *   {"attributeId":100068,"description":"без отделки","title":"Отделка"}
+ * (title может быть «Отделка» или «Тип ремонта»). Обходим рекурсивно —
+ * глубина/путь блока меняются между вёрстками.
+ */
+function findRenovationLabel(obj: unknown, depth = 0): string | null {
+  if (!obj || depth > 8) return null;
+  if (Array.isArray(obj)) {
+    for (const el of obj) {
+      const r = findRenovationLabel(el, depth + 1);
+      if (r) return r;
+    }
+    return null;
+  }
+  if (typeof obj === 'object') {
+    const o = obj as Record<string, unknown>;
+    const title = typeof o.title === 'string' ? o.title : '';
+    if (/^(отделка|тип ремонта|ремонт)$/i.test(title.trim())) {
+      const desc = o.description ?? o.value ?? o.text;
+      if (typeof desc === 'string' && desc.trim()) return desc.trim();
+    }
+    for (const k of Object.keys(o)) {
+      const r = findRenovationLabel(o[k], depth + 1);
+      if (r) return r;
+    }
+  }
+  return null;
+}
 
 /**
  * Чтение данных из window.__staticRouterHydrationData (MAIN world)
@@ -158,6 +191,10 @@ function parseAvitoHydrationData(buyerItemJson: string, metaPrice: string | null
       }
     }
 
+    // Тип ремонта (MVP-4, admin#37): блок «О квартире» → «Отделка»/«Тип ремонта»
+    const renovation_raw = findRenovationLabel(buyerItem);
+    const renovation_type = mapRenovationLabel(renovation_raw);
+
     return {
       status,
       price,
@@ -166,6 +203,8 @@ function parseAvitoHydrationData(buyerItemJson: string, metaPrice: string | null
       price_history,
       seller_name,
       seller_type,
+      renovation_type,
+      renovation_raw,
       updated,
     };
   } catch {

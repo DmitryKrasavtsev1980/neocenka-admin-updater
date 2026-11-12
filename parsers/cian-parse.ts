@@ -4,6 +4,7 @@
 
 import type { ParseResult, PriceHistoryItem } from '../types';
 import { injectScript } from '../utils/tab-manager';
+import { mapCianRenovation } from '../utils/renovation';
 
 /**
  * Парсинг страницы объявления CIAN (инжектируется в ISOLATED world)
@@ -49,6 +50,35 @@ function parseCianDetailPage() {
   if (dateEl) {
     result.updatedDateText = dateEl.textContent?.trim() || null;
   }
+
+  // Тип ремонта/отделки (MVP-4, admin#37).
+  // DOM-фактойды: [data-name="ObjectFactoidsItem"] — label («Отделка») и
+  // значение («Предчистовая») соседними span/p внутри одного элемента.
+  // Запасной источник — inline JSON "decoration":"preFine".
+  let renovation: string | null = null;
+  for (const el of Array.from(
+    document.querySelectorAll('[data-name="ObjectFactoidsItem"], [data-testid="OfferSummaryInfoItem"]'),
+  )) {
+    const parts = Array.from(el.querySelectorAll('p, span'))
+      .map((n) => (n.textContent || '').trim())
+      .filter((t, i, arr) => t && arr.indexOf(t) === i && t.length < 60);
+    // Пара вида [«Отделка», «Предчистовая»] (или вложенно — label первым)
+    const labelIdx = parts.findIndex((t) => /^(отделка|тип ремонта|ремонт)$/i.test(t));
+    if (labelIdx !== -1 && parts[labelIdx + 1]) {
+      renovation = parts[labelIdx + 1];
+      break;
+    }
+  }
+  if (!renovation) {
+    for (const s of Array.from(document.querySelectorAll('script'))) {
+      const m = (s.textContent || '').match(/"decoration"\s*:\s*"([^"]+)"/);
+      if (m) {
+        renovation = m[1];
+        break;
+      }
+    }
+  }
+  result.renovation = renovation;
 
   // История цены: основной источник — priceChanges в инлайновом JSON страницы.
   // Он доступен и без авторизации. Старый селектор DOM (tr[class*="history-event"])
@@ -193,6 +223,10 @@ export async function parseCianAd(tabId: number): Promise<ParseResult> {
       price: h.price,
     }));
 
+    // Тип ремонта/отделки (MVP-4, admin#37)
+    const renovation_raw: string | null = rawData.renovation ?? null;
+    const renovation_type = mapCianRenovation(renovation_raw);
+
     return {
       status: rawData.status || 'active',
       price: rawData.price || null,
@@ -201,6 +235,8 @@ export async function parseCianAd(tabId: number): Promise<ParseResult> {
       price_history,
       seller_name: null,
       seller_type: null,
+      renovation_type,
+      renovation_raw,
       updated,
     };
   } catch (err) {

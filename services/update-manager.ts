@@ -1065,6 +1065,11 @@ export class UpdateManager {
       price_history: mergedHistory.length > 0 ? mergedHistory : undefined,
       seller_name: parseResult.seller_name ?? undefined,
       seller_type: parseResult.seller_type ?? undefined,
+      // MVP-4 (admin#37): тип ремонта; сырое значение площадки — в source_metadata
+      renovation_type: parseResult.renovation_type ?? undefined,
+      source_metadata: parseResult.renovation_raw
+        ? { renovation_raw: parseResult.renovation_raw }
+        : undefined,
       updated,
     };
   }

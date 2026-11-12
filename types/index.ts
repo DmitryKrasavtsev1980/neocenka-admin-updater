@@ -54,6 +54,18 @@ export interface ParseResult {
   seller_name: string | null;
   seller_type: string | null;
   /**
+   * Тип ремонта (MVP-4, admin#37): without/cosmetic/designer/euro.
+   * Avito — hydration «О квартире» → «Отделка»/«Тип ремонта»;
+   * Cian — DOM-фактойд «Отделка» или inline JSON "decoration".
+   * Опционально: в error-ветках парсеров не заполняется.
+   */
+  renovation_type?: string | null;
+  /**
+   * Сырое значение площадки («Предчистовая», «Без отделки» …) —
+   * для source_metadata.renovation_raw, если не сматчилось в enum.
+   */
+  renovation_raw?: string | null;
+  /**
    * Дата изменения объявления на площадке (не время нашего парсинга).
    * На сервере — колонка ads.updated, НЕ ads.updated_at (это Laravel-
    * таймстамп правки строки).
@@ -79,6 +91,8 @@ export interface AdUpdateData {
   price_history?: PriceHistoryItem[];
   seller_name?: string;
   seller_type?: string;
+  /** MVP-4: without/cosmetic/designer/euro (null не шлём — не затираем) */
+  renovation_type?: string;
   source_metadata?: Record<string, unknown>;
   updated?: string;
 }
