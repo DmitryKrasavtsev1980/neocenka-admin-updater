@@ -47,14 +47,43 @@ function readAvitoPageData() {
     const loaderData = (window as any).__staticRouterHydrationData;
     if (!loaderData) return null;
 
+    // Старая вёрстка: ключ с 'realty/Detail' на верхнем уровне.
+    // Новая вёрстка (осень 2026): ключей realty/Detail нет, buyerItem лежит
+    // в loaderData['catalog-or-main-or-item'].buyerItem.
+    let buyerItem: any = null;
     const keys = Object.keys(loaderData);
     const key = keys.find(k => k.includes('realty/Detail'));
-    if (!key) return null;
-
-    const detail = loaderData[key]?.loaderData?.['realty/Detail'];
-    if (!detail) return null;
-
-    const buyerItem = detail.buyerItem;
+    if (key) {
+      buyerItem = loaderData[key]?.loaderData?.['realty/Detail']?.buyerItem ?? null;
+    }
+    if (!buyerItem) {
+      const ld = loaderData.loaderData;
+      if (ld && typeof ld === 'object') {
+        buyerItem = ld['catalog-or-main-or-item']?.buyerItem ?? null;
+      }
+    }
+    if (!buyerItem) {
+      // Запасной рекурсивный поиск: путь блока меняется между вёрстками.
+      const findBuyer = (obj: any, depth: number): any => {
+        if (!obj || depth > 8) return null;
+        if (Array.isArray(obj)) {
+          for (const el of obj) {
+            const r = findBuyer(el, depth + 1);
+            if (r) return r;
+          }
+          return null;
+        }
+        if (typeof obj === 'object') {
+          if (obj.buyerItem && typeof obj.buyerItem === 'object') return obj.buyerItem;
+          for (const k of Object.keys(obj)) {
+            const r = findBuyer(obj[k], depth + 1);
+            if (r) return r;
+          }
+        }
+        return null;
+      };
+      buyerItem = findBuyer(loaderData, 0);
+    }
     if (!buyerItem) return null;
 
     // Идентификаторы для API истории цены

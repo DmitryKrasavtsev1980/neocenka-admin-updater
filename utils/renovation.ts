@@ -7,7 +7,7 @@
  *          или inline JSON "decoration":"preFine" (enum).
  *
  * Маппинг в enum ads.renovation_type:
- *  without ← без отделки / без ремонта / предчистовая / черновая
+ *  without ← без отделки / без ремонта / предчистовая / черновая / требует ремонта
  *  cosmetic ← косметический / чистовая / под ключ
  *  designer ← дизайнерский
  *  euro ← евро / евроремонт
@@ -21,7 +21,7 @@ export function mapRenovationLabel(raw: string | null | undefined): RenovationTy
   if (!raw) return null;
   const s = String(raw).toLowerCase().replace(/ё/g, 'е').trim();
   if (!s) return null;
-  if (/без\s*отделк|без\s*ремонт|предчистов|чернов/.test(s)) return 'without';
+  if (/без\s*отделк|без\s*ремонт|предчистов|чернов|требует\s*ремонт|нуждается\s*в\s*ремонт/.test(s)) return 'without';
   if (/космет/.test(s)) return 'cosmetic';
   if (/дизайнер/.test(s)) return 'designer';
   if (/евро/.test(s)) return 'euro';
