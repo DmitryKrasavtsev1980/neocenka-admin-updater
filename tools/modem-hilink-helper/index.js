@@ -260,6 +260,15 @@ async function rotate() {
   }
 }
 
+// ── проверка выхода в интернет (кэш 30 с, чтобы /status не долбил ipify) ──
+let internetCache = { at: 0, ip: null, ok: false };
+async function getInternetStatus(fresh) {
+  if (!fresh && Date.now() - internetCache.at < 30_000) return internetCache;
+  const ip = await getPublicIp();
+  internetCache = { at: Date.now(), ip, ok: !!ip };
+  return internetCache;
+}
+
 // ── HTTP ─────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
   const send = (code, obj) => {
@@ -268,6 +277,7 @@ const server = http.createServer(async (req, res) => {
   };
 
   if (req.method === 'GET' && req.url.startsWith('/status')) {
+    const net = await getInternetStatus(req.url.includes('fresh=1'));
     return send(200, {
       ok: true,
       slot: SLOT,
@@ -280,6 +290,9 @@ const server = http.createServer(async (req, res) => {
       lastMethod,
       lastOldIp,
       lastNewIp,
+      internetIp: net.ip,
+      internetOk: net.ok,
+      internetCheckedAt: net.at ? new Date(net.at).toISOString() : null,
     });
   }
 

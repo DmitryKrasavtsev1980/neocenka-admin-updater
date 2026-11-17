@@ -99,6 +99,10 @@ export const SLOT_TEMPO_OVERRIDES: Record<
   Partial<Record<string, { checkDelayMs?: number; parseDelayMs?: number; dailyCap?: number }>>
 > = {
   C: { avito: { checkDelayMs: 105_000 } },
+  // 2026-11-17: эксперимент — avito на билайне (слот A) БЕЗ ЛОГИНА с паузой
+  // 2 минуты между запросами; проверяем, будут ли ip_block/капча при анонимном
+  // парсинге. По решению пользователя.
+  A: { avito: { checkDelayMs: 120_000 } },
 };
 
 /** Итоговый темп: базовый SOURCE_TEMPO + надстройка слота. */

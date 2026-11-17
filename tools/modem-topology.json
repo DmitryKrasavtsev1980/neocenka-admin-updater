@@ -25,14 +25,14 @@
         {
             "slot": "A",
             "label": "билайн +7 961 218-42-00 — запасной канал интернета ПК",
-            "usbInstanceId": "USB\\VID_3566&PID_2001&MI_00\\9&2F928B08&0&0000",
-            "ifaceAlias": "Ethernet 6",
-            "mac": "66-4A-87-25-21-21",
-            "iface": "192.168.8.110",
+            "usbInstanceId": "USB\\VID_3566&PID_2001&MI_00\\9&A1F29BE&0&0000",
+            "ifaceAlias": "Ethernet 5",
+            "mac": "56-B0-45-66-13-21",
+            "iface": "192.168.8.112",
             "proxyPort": 8881,
             "helperPort": 8891,
             "authorizedSources": [],
-            "note": "Симка билайна (PLMN 25099), egress 89.113.x — проверено 17.11.2026. Интернет есть. Провод — основной канал ПК, этот модем — запасной + парсинг avito/cian (профили 9228/9229, только при живом проводе).",
+            "note": "Симка билайна, egress 89.113.x (проверено по внешнему IP). Перепривязка 17.11.2026 после полной перетыки модемов. Профили A-bilayn-avito/cian (9228/9229, requiresWired).",
             "profiles": [
                 {
                     "name": "A-bilayn-avito",
@@ -55,10 +55,10 @@
         },
         {
             "slot": "B",
-            "label": "Yota (без интернета)",
+            "label": "Yota (без интернета, ждёт баланс)",
             "usbInstanceId": "USB\\VID_3566&PID_2001&MI_00\\8&16F11654&0&0000",
             "ifaceAlias": "Ethernet 4",
-            "mac": "2A-FA-B5-99-E7-BB",
+            "mac": "1A-DA-10-8B-4B-30",
             "iface": "192.168.8.111",
             "proxyPort": 8882,
             "helperPort": 8892,
@@ -66,7 +66,7 @@
                 "avito",
                 "cian"
             ],
-            "note": "Симка Yota (17.11.2026: интернета нет — проверить баланс/регистрацию). Модем тот же, что был MegaFon (16F11654), переткнут в другой порт хаба. Egress ожидается 188.162.x (сеть MegaFon).",
+            "note": "Симка Yota, интернета нет (ждёт пополнения). Исторически тот же модем (16F11654) был MegaFon. Аккаунт Avito полосы — на другом номере.",
             "profiles": [
                 {
                     "name": "B-yota-avito",
@@ -88,14 +88,14 @@
         {
             "slot": "C",
             "label": "Tele2 (новая симка)",
-            "usbInstanceId": "USB\\VID_12D1&PID_14DC&MI_00\\8&31B61C6&0&0000",
-            "ifaceAlias": "Ethernet 8",
+            "usbInstanceId": "USB\\VID_12D1&PID_1F01\\0123456789ABCDEF",
+            "ifaceAlias": null,
             "mac": "0C-5B-8F-27-9A-64",
-            "iface": "192.168.8.100",
+            "iface": null,
             "proxyPort": 8883,
             "helperPort": 8893,
             "authorizedSources": [],
-            "note": "⚠️ 17.11.2026: модем (Huawei VID_12D1&PID_1F01) Windows видит в режиме MBIM — сетевого адаптера нет, helper/proxy не поднять. Нужен режим NDIS/HiLink (переподключить/перезагрузить модем). Tele2.",
+            "note": "⚠️ Модем в режиме «флешка» (PID_1F01, сетевой функции нет) — ждёт перетыки/установщика с CD (E:\\AutoRun.exe).",
             "profiles": [
                 {
                     "name": "C-tele2-avito",
