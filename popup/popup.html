@@ -30,16 +30,50 @@
       </div>
     </div>
 
+    <div class="section-title">Маршрутизация</div>
+    <div class="routing" id="routing">
+      <div class="route-chain" id="routeChain">…</div>
+      <div class="config-row"><span class="config-label">Модем (LAN)</span><span id="modemLan">—</span></div>
+      <div class="config-row"><span class="config-label">IP в интернете</span><span id="modemIp">—</span></div>
+      <div class="config-row"><span class="config-label">Helper</span><span id="modemHelper">—</span></div>
+      <div id="slotChips"></div>
+      <button id="probeBtn" class="btn btn-secondary">🔍 Проверить маршрут</button>
+    </div>
+    <div class="config-hint">Трафик этого Chrome всегда идёт через свой proxy → свой модем</div>
+
+    <div class="section-title">Настройки воркера</div>
+    <div class="settings" id="settingsForm">
+      <div class="config-row">
+        <label class="config-label" for="selSource">Сайт</label>
+        <select id="selSource">
+          <option value="avito">Avito</option>
+          <option value="cian">CIAN</option>
+        </select>
+      </div>
+      <div class="config-row">
+        <label class="config-label" for="selModem">Модем (слот)</label>
+        <select id="selModem">
+          <option value="A">A — билайн</option>
+          <option value="B">B — MegaFon</option>
+          <option value="C">C — Tele2</option>
+        </select>
+      </div>
+      <div class="config-row">
+        <label class="config-label" for="inpModemHost">Helper (смена IP)</label>
+        <input id="inpModemHost" type="text" spellcheck="false" placeholder="http://127.0.0.1:8891">
+      </div>
+      <button id="saveBtn" class="btn btn-secondary">💾 Сохранить</button>
+    </div>
+    <div class="config-hint">Сайт и модем задаются здесь; применяется сразу к работающему воркеру</div>
+
     <div class="config-info" id="configInfo">
-      <div class="config-row"><span class="config-label">Источник</span><span id="cfgSource">—</span></div>
-      <div class="config-row"><span class="config-label">Модем</span><span id="cfgModem">—</span></div>
-      <div class="config-row"><span class="config-label">Задачи</span><span id="cfgStreams">—</span></div>
       <div class="config-row config-row-wrap"><span class="config-label">Что крутим</span><span id="cfgTasks">—</span></div>
+      <div class="config-row"><span class="config-label">Задачи</span><span id="cfgStreams">—</span></div>
       <div class="config-row"><span class="config-label">Батч</span><span id="cfgBatch">—</span></div>
       <div class="config-row"><span class="config-label">Опрос</span><span id="cfgPoll">—</span></div>
       <div class="config-row"><span class="config-label">Автоочередь</span><span id="cfgAuto">—</span></div>
     </div>
-    <div class="config-hint">Настройки приходят с сервера</div>
+    <div class="config-hint">Батч/опрос/автоочередь — с сервера</div>
 
     <div class="buttons">
       <button id="startBtn" class="btn btn-primary">▶ Запустить</button>

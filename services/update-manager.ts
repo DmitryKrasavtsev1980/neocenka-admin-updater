@@ -783,7 +783,9 @@ export class UpdateManager {
       const result = await apiClient.createTask({
         name: `Авто-обновление ${this.settings.source}`,
         source: SOURCE_DOMAIN[this.settings.source],
-        filter_data: { update_all: true, mode: 'stale', stale_days: 3 },
+        // stale_days=5 — как у серверного досыпа (update:enqueue-support) и
+        // критерия viol_updated_5d: 3 дня заставляли долбить свежие карточки.
+        filter_data: { update_all: true, mode: 'stale', stale_days: 5 },
       });
       if (!result?.task || !result.ads_found) {
         console.log('[Updater] Досыпать нечего (нет областей «В работе» или очередь актуальна)');

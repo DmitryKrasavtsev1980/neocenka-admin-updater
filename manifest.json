@@ -8,7 +8,8 @@
     "scripting",
     "alarms",
     "storage",
-    "cookies"
+    "cookies",
+    "proxy"
   ],
   "host_permissions": [
     "https://*.avito.ru/*",
