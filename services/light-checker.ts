@@ -215,7 +215,12 @@ export class LightChecker {
         price: r.price ? Number(r.price) : null,
       })),
     }).catch(() => null);
-    const changed: number[] = resp?.changed_ids || [];
+    // ВРЕМЕННО: изменения цен не отправляем — формат цены light-чека
+    // расходится с базой («от N», скидки) и даёт ложные изменения (949 из
+    // 1311 за прогон 18.11). Отправляем только СНЯТЫЕ (точный факт).
+    // TODO: нормализовать цену/сравнение — вернуть price-события.
+    const closedIds = send.filter((r) => r.status === 'closed').map((r) => r.id);
+    const changed: number[] = closedIds;
     if (changed.length) {
       await this.apiPost('/api/update/tasks', {
         filter_data: { ids: changed },
