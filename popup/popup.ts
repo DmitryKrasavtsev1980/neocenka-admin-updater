@@ -383,9 +383,14 @@ function updateLight(p: {
   if (p.closed !== undefined || p.blocked !== undefined) {
     lightStats.textContent = `${p.closed ?? 0} / ${p.blocked ?? 0}`;
   }
+  const isRemote = (p as any).remote === true;
   if (p.running !== undefined) {
-    lightStartBtn.disabled = p.running;
-    lightStopBtn.disabled = !p.running;
+    // В другом профиле — только наблюдение, управление заблокировано.
+    lightStartBtn.disabled = p.running || isRemote;
+    lightStopBtn.disabled = !p.running || isRemote;
+  }
+  if (isRemote && p.stage !== undefined) {
+    lightStage.textContent = p.stage + ' (другой профиль)';
   }
 }
 

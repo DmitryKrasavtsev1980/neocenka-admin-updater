@@ -110,7 +110,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       case 'LIGHT_START': {
-        // Лёгкая проверка областей (без аккаунта) — запуск в фоне.
+        // Лёгкая проверка областей (без аккаунта). Защита от параллельного
+        // запуска в нескольких браузерах (расширение универсальное!):
+        // если проверка уже идёт в другом профиле — не стартуем вторую.
+        const local = lightChecker.getProgress();
+        if (local.running) return { error: 'уже работает в этом профиле' };
+        const remote = await LightChecker.fetchGlobal().catch(() => null);
+        if (remote && remote.running) {
+          return { error: 'уже идёт в другом профиле — смотри прогресс здесь' };
+        }
         lightChecker.start().catch(() => {});
         return { started: true };
       }
