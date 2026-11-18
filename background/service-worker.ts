@@ -121,7 +121,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       case 'LIGHT_STATUS': {
-        return lightChecker.getProgress();
+        const local = lightChecker.getProgress();
+        if (local.running) return local;
+        // Проверка может идти в ДРУГОМ профиле — показываем глобальный статус.
+        const remote = await LightChecker.fetchGlobal().catch(() => null);
+        return remote && remote.running ? { ...remote, remote: true } : local;
       }
 
       default:
