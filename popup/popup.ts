@@ -369,11 +369,17 @@ function updateLight(p: {
   running?: boolean;
   stage?: string;
   checked?: number;
+  total?: number;
   closed?: number;
   blocked?: number;
 }) {
   if (p.stage !== undefined) lightStage.textContent = p.stage;
-  if (p.checked !== undefined) lightChecked.textContent = String(p.checked);
+  const bar = document.getElementById('lightBar');
+  if (p.checked !== undefined) {
+    const total = p.total ?? 0;
+    lightChecked.textContent = total ? `${p.checked} из ${total}` : String(p.checked);
+    if (bar) bar.style.width = total ? Math.min(100, Math.round((p.checked / total) * 100)) + '%' : '0%';
+  }
   if (p.closed !== undefined || p.blocked !== undefined) {
     lightStats.textContent = `${p.closed ?? 0} / ${p.blocked ?? 0}`;
   }

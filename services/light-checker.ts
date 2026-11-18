@@ -16,6 +16,7 @@ export interface LightProgress {
   running: boolean;
   stage: string;
   checked: number;
+  total: number;
   blocked: number;
   closed: number;
   repriced: number;
@@ -31,7 +32,7 @@ export class LightChecker {
   private stopFlag = false;
   private tabId: number | null = null;
   private progress: LightProgress = {
-    running: false, stage: 'остановлен', checked: 0,
+    running: false, stage: 'остановлен', checked: 0, total: 0,
     blocked: 0, closed: 0, repriced: 0, source: 'avito',
   };
   private onUpdate: ((p: LightProgress) => void) | null = null;
@@ -52,10 +53,30 @@ export class LightChecker {
     this.publish();
   }
 
+  private lastPublishAt = 0;
+
   private publish() {
     this.progress.running = this.running;
     if (this.onUpdate) this.onUpdate(this.getProgress());
     chrome.runtime.sendMessage({ type: 'LIGHT_PROGRESS', ...this.getProgress() }).catch(() => {});
+    // Сквозной статус на сервер: popup ЛЮБОГО профиля видит прогресс
+    // (throttle — раз в 3 секунды, события каждую карточку).
+    const now = Date.now();
+    if (now - this.lastPublishAt > 3000 || !this.progress.running) {
+      this.lastPublishAt = now;
+      this.apiPost(`${API_MONITOR}/lightcheck-progress`, { progress: this.getProgress() }).catch(() => {});
+    }
+  }
+
+  /** Глобальный статус с сервера (если проверка идёт в другом профиле). */
+  static async fetchGlobal(apiUrl: string = 'https://54.neocenka.ru'): Promise<LightProgress | null> {
+    try {
+      const r = await fetch(apiUrl + API_MONITOR + '/lightcheck-progress');
+      const d = await r.json();
+      return d?.progress || null;
+    } catch {
+      return null;
+    }
   }
 
   private async apiGet(path: string): Promise<any> {
@@ -80,7 +101,7 @@ export class LightChecker {
     this.running = true;
     this.stopFlag = false;
     this.progress = {
-      running: true, stage: 'старт', checked: 0,
+      running: true, stage: 'старт', checked: 0, total: 0,
       blocked: 0, closed: 0, repriced: 0, source: sources[0],
     };
     this.publish();
@@ -95,6 +116,7 @@ export class LightChecker {
             `${API_MONITOR}/lightcheck-urls?limit=${size}&source=${src}`
           ).catch(() => null);
           const items: Array<{ id: number; url: string }> = d?.items || [];
+          if (d?.total) this.progress.total = d.total;
           if (!items.length) {
             this.progress.stage = `${src}: пул пройден`;
             break;

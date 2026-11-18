@@ -264,3 +264,19 @@ h1 {
 .slot-chip small {
   color: #888;
 }
+
+
+/* полоса прогресса лёгкой проверки */
+.progress {
+  height: 8px;
+  background: #0d1117;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  width: 0;
+  background: #4CAF50;
+  border-radius: 4px;
+  transition: width 0.3s;
+}
