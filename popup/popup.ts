@@ -345,6 +345,9 @@ chrome.runtime.onMessage.addListener((message) => {
     });
     addLog(`Завершено: ${message.processed} обработано, ${message.matched} обновлено`, 'success');
   }
+  if (message.type === 'LIGHT_PROGRESS') {
+    updateLight(message);
+  }
 });
 
 // --- инициализация ---
@@ -353,5 +356,50 @@ send({ type: 'STATUS' }).then((stats) => {
   if (stats) updateUI(stats);
 });
 loadForm();
+
+// --- Лёгкая проверка областей (LightChecker) ---
+
+const lightStartBtn = document.getElementById('lightStartBtn') as HTMLButtonElement;
+const lightStopBtn = document.getElementById('lightStopBtn') as HTMLButtonElement;
+const lightStage = document.getElementById('lightStage')!;
+const lightChecked = document.getElementById('lightChecked')!;
+const lightStats = document.getElementById('lightStats')!;
+
+function updateLight(p: {
+  running?: boolean;
+  stage?: string;
+  checked?: number;
+  closed?: number;
+  blocked?: number;
+}) {
+  if (p.stage !== undefined) lightStage.textContent = p.stage;
+  if (p.checked !== undefined) lightChecked.textContent = String(p.checked);
+  if (p.closed !== undefined || p.blocked !== undefined) {
+    lightStats.textContent = `${p.closed ?? 0} / ${p.blocked ?? 0}`;
+  }
+  if (p.running !== undefined) {
+    lightStartBtn.disabled = p.running;
+    lightStopBtn.disabled = !p.running;
+  }
+}
+
+lightStartBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'LIGHT_START' }, () => {
+    addLog('Лёгкая проверка запущена', 'success');
+    updateLight({ running: true, stage: 'запуск...' });
+  });
+});
+
+lightStopBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'LIGHT_STOP' }, () => {
+    addLog('Лёгкая проверка остановлена', 'info');
+    updateLight({ running: false, stage: 'остановлен' });
+  });
+});
+
+// текущее состояние при открытии popup
+chrome.runtime.sendMessage({ type: 'LIGHT_STATUS' }, (p) => {
+  if (p) updateLight(p);
+});
 
 console.log('[Updater] Popup loaded');

@@ -3,9 +3,11 @@
  */
 
 import { UpdateManager, DEFAULT_API_URL } from '../services/update-manager';
+import { LightChecker } from '../services/light-checker';
 import type { Settings } from '../types';
 
 let manager: UpdateManager | null = null;
+const lightChecker = new LightChecker();
 
 /**
  * Запуск воркера. Вызывается и из popup (через onMessage), и из будильника.
@@ -105,6 +107,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'SAVE_SETTINGS': {
         await saveSettings(message.settings);
         return { saved: true };
+      }
+
+      case 'LIGHT_START': {
+        // Лёгкая проверка областей (без аккаунта) — запуск в фоне.
+        lightChecker.start().catch(() => {});
+        return { started: true };
+      }
+
+      case 'LIGHT_STOP': {
+        lightChecker.stop();
+        return { stopped: true };
+      }
+
+      case 'LIGHT_STATUS': {
+        return lightChecker.getProgress();
       }
 
       default:
