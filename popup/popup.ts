@@ -370,15 +370,26 @@ function updateLight(p: {
   stage?: string;
   checked?: number;
   total?: number;
+  sources?: Record<string, { checked: number; total: number }>;
   closed?: number;
   blocked?: number;
 }) {
   if (p.stage !== undefined) lightStage.textContent = p.stage;
-  const bar = document.getElementById('lightBar');
+  // Прогресс по КАЖДОМУ источнику отдельно (avito/cian) — без путаницы.
+  const renderSrc = (key: string, labelId: string, barId: string) => {
+    const sp = p.sources?.[key];
+    const label = document.getElementById(labelId);
+    const bar = document.getElementById(barId);
+    if (!sp || !label) return;
+    label.textContent = `${sp.checked} из ${sp.total || '?'}`;
+    if (bar) {
+      bar.style.width = sp.total ? Math.min(100, Math.round((sp.checked / sp.total) * 100)) + '%' : '0%';
+    }
+  };
+  renderSrc('avito', 'lightAvito', 'lightBarAvito');
+  renderSrc('cian', 'lightCian', 'lightBarCian');
   if (p.checked !== undefined) {
-    const total = p.total ?? 0;
-    lightChecked.textContent = total ? `${p.checked} из ${total}` : String(p.checked);
-    if (bar) bar.style.width = total ? Math.min(100, Math.round((p.checked / total) * 100)) + '%' : '0%';
+    lightChecked.textContent = String(p.checked);
   }
   if (p.closed !== undefined || p.blocked !== undefined) {
     lightStats.textContent = `${p.closed ?? 0} / ${p.blocked ?? 0}`;

@@ -12,11 +12,17 @@
  * (несколько подряд без просвета). Управление — из popup (LIGHT_START/STOP).
  */
 
+export interface SourceProgress {
+  checked: number;
+  total: number;
+}
+
 export interface LightProgress {
   running: boolean;
   stage: string;
-  checked: number;
-  total: number;
+  checked: number;      // всего проверено (оба источника)
+  total: number;        // всего в пулах (оба источника)
+  sources: Record<string, SourceProgress>;  // avito/cian отдельно
   blocked: number;
   closed: number;
   repriced: number;
@@ -33,6 +39,7 @@ export class LightChecker {
   private tabId: number | null = null;
   private progress: LightProgress = {
     running: false, stage: 'остановлен', checked: 0, total: 0,
+    sources: { avito: { checked: 0, total: 0 }, cian: { checked: 0, total: 0 } },
     blocked: 0, closed: 0, repriced: 0, source: 'avito',
   };
   private onUpdate: ((p: LightProgress) => void) | null = null;
@@ -102,6 +109,7 @@ export class LightChecker {
     this.stopFlag = false;
     this.progress = {
       running: true, stage: 'старт', checked: 0, total: 0,
+      sources: { avito: { checked: 0, total: 0 }, cian: { checked: 0, total: 0 } },
       blocked: 0, closed: 0, repriced: 0, source: sources[0],
     };
     this.publish();
@@ -116,7 +124,12 @@ export class LightChecker {
             `${API_MONITOR}/lightcheck-urls?limit=${size}&source=${src}`
           ).catch(() => null);
           const items: Array<{ id: number; url: string }> = d?.items || [];
-          if (d?.total) this.progress.total = d.total;
+          if (d?.total) {
+            this.progress.sources[src] = this.progress.sources[src] || { checked: 0, total: 0 };
+            this.progress.sources[src].total = d.total;
+            this.progress.total = Object.values(this.progress.sources)
+              .reduce((a, sp) => a + (sp.total || 0), 0);
+          }
           if (!items.length) {
             this.progress.stage = `${src}: пул пройден`;
             break;
@@ -173,8 +186,10 @@ export class LightChecker {
         });
         const data = res?.[0]?.result || { status: 'unknown', price: null };
         rows.push({ id: it.id, url: it.url, ...data });
-        // Живой прогресс в popup после каждой карточки.
+        // Живой прогресс в popup после каждой карточки (по источникам).
         this.progress.checked++;
+        const sp = this.progress.sources[this.progress.source];
+        if (sp) sp.checked++;
         if (data.status === 'closed') this.progress.closed++;
         if (data.status === 'blocked') this.progress.blocked++;
         this.publish();
