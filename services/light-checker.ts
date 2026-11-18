@@ -178,28 +178,29 @@ export class LightChecker {
     });
   }
 
-  /** Результаты -> сервер + изменения в полный парсинг. */
+  /**
+   * Результаты -> сервер; ИЗМЕНЕНИЯ (цена/снятие) -> очередь полного парсинга.
+   * Дифф цен делает СЕРВЕР (его снимок = сама база) и возвращает changed_ids —
+   * воркеры полного парсинга подхватят их сами (explicit-направление, FIFO).
+   */
   private async report(rows: Array<{ id: number; url: string; status: string; price: string | null }>) {
-    const known = new Map<string, string | null>();
     const send = rows.filter((r) => r.status === 'active' || r.status === 'closed');
-    if (send.length) {
-      await this.apiPost(`${API_MONITOR}/lightcheck-report`, {
-        results: send.map((r) => ({ id: r.id, status: r.status })),
-      }).catch(() => null);
-    }
-    // Простые изменения (снятие/смена цены) — точечно в полный парсинг.
-    // Снимок прошлых значений держит сервер; здесь фиксируем только события.
-    const eventIds = rows
-      .filter((r) => r.status === 'closed')
-      .map((r) => r.id);
-    if (eventIds.length) {
+    if (!send.length) return;
+    const resp = await this.apiPost(`${API_MONITOR}/lightcheck-report`, {
+      results: send.map((r) => ({
+        id: r.id,
+        status: r.status,
+        price: r.price ? Number(r.price) : null,
+      })),
+    }).catch(() => null);
+    const changed: number[] = resp?.changed_ids || [];
+    if (changed.length) {
       await this.apiPost('/api/update/tasks', {
-        filter_data: { ids: eventIds },
-        name: 'Light-чек: снятые с публикации (авто)',
-        source: 'avito.ru',
+        filter_data: { ids: changed },
+        name: 'Light-чек: изменения цен/снятие (авто)',
       }).catch(() => null);
+      this.progress.repriced += changed.length;
     }
-    return known;
   }
 }
 
