@@ -118,13 +118,13 @@ export class LightChecker {
       for (const src of sources) {
         this.progress.source = src;
         let processed = 0;
-        // since — момент старта: сервер отдаёт только не проверенные после него.
-        // Когда пул пройден — выборка пуста, цикл завершается (без кругов).
-        const since = new Date().toISOString();
-        while (processed < budget && !this.stopFlag) {
-          const size = Math.min(PORTION, budget - processed);
+        // ДЕЖУРНАЯ схема: проверяем «протухшие» карточки (фильтр по updated
+        // на сервере). Пул исчерпан — ждём час и опрашиваем снова: за час
+        // часть карточек перевалит за порог свежести и попадёт в проверку.
+        while (!this.stopFlag) {
+          const size = PORTION;
           const d = await this.apiGet(
-            `${API_MONITOR}/lightcheck-urls?limit=${size}&source=${src}&since=${encodeURIComponent(since)}`
+            `${API_MONITOR}/lightcheck-urls?limit=${size}&source=${src}&stale_days=1`
           ).catch(() => null);
           const items: Array<{ id: number; url: string }> = d?.items || [];
           if (d?.total) {
@@ -261,7 +261,8 @@ function extractCard(this: any): { status: string; price: string | null } {
     if (/Объявление снято|снято с публикации|удалено|неактивно/i.test(body)) status = 'closed';
     else if (/Сравнить|Пожаловаться|Обновлено:/i.test(body)) status = 'active';
   } else {
-    if (/Объявление закрыто|Объявление истекло|Объявление не посмотреть/i.test(body)) status = 'closed';
+    // «Объявление не посмотреть» — НЕ снятие (бывает при временных проблемах).
+    if (/Объявление закрыто|Объявление истекло/i.test(body)) status = 'closed';
     else if (/Добавить в избранное|Сравнить/i.test(body)) status = 'active';
   }
   let price: string | null = null;
