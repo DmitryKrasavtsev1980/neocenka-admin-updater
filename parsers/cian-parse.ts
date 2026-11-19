@@ -12,13 +12,11 @@ import { mapCianRenovation } from '../utils/renovation';
 function parseCianDetailPage() {
   const result: any = {};
 
-  // Статус
+  // Статус. Закрытая карточка Cian ещё отдаёт данные (цена, дата «Обновлено»,
+  // ремонт, история цен) — это финальный снимок, он пишется в архив
+  // (data-server#49). НИКОГДА не выходим здесь с одним статусом.
   const unpublished = document.querySelector('[data-name="OfferUnpublished"]');
-  if (unpublished) {
-    result.status = 'archived';
-    return result;
-  }
-  result.status = 'active';
+  result.status = unpublished ? 'archived' : 'active';
 
   // Цена
   const priceEl = document.querySelector('[data-testid="price-amount"]');
@@ -125,29 +123,36 @@ function parseCianDetailPage() {
  * Парсинг русской даты
  */
 function parseRuDate(text: string): string | null {
+  // Месяцы — по первым буквам: карточка пишет сокращённо («9 сен, 12:07»,
+  // «5 авг 2026»), старый словарь полных форм («сентября») не матчился и
+  // дата «Обновлено» терялась (data-server#49).
   const months: Record<string, number> = {
-    'января': 0, 'февраля': 1, 'марта': 2, 'апреля': 3,
-    'мая': 4, 'июня': 5, 'июля': 6, 'августа': 7,
-    'сентября': 8, 'октября': 9, 'ноября': 10, 'декабря': 11,
+    'янв': 0, 'фев': 1, 'мар': 2, 'апр': 3,
+    'мая': 4, 'май': 4, 'июн': 5, 'июл': 6, 'авг': 7,
+    'сен': 8, 'окт': 9, 'ноя': 10, 'дек': 11,
   };
+  const monthOf = (w: string): number | undefined => months[w.toLowerCase().slice(0, 3)] ?? months[w.toLowerCase().slice(0, 4)];
 
   const lower = text.toLowerCase().trim();
   const now = new Date();
 
   const fullMatch = lower.match(/(\d{1,2})\s+(\w+)\s+(\d{4})/);
   if (fullMatch) {
-    const month = months[fullMatch[2]];
+    const month = monthOf(fullMatch[2]);
     if (month !== undefined) {
       return new Date(parseInt(fullMatch[3]), month, parseInt(fullMatch[1])).toISOString();
     }
   }
 
-  const shortMatch = lower.match(/(\d{1,2})\s+(\w+),?\s*(\d{1,2}):(\d{2})/);
+  // Короткая форма без года: «9 сен, 12:07» / «5 авг». Год выводится от
+  // текущей даты; если дата получилась в будущем — это прошлый год.
+  const shortMatch = lower.match(/(\d{1,2})\s+(\w+),?\s*(?:(\d{1,2}):(\d{2}))?/);
   if (shortMatch) {
-    const month = months[shortMatch[2]];
+    const month = monthOf(shortMatch[2]);
     if (month !== undefined) {
       const d = new Date(now.getFullYear(), month, parseInt(shortMatch[1]),
-        parseInt(shortMatch[3]), parseInt(shortMatch[4]));
+        parseInt(shortMatch[3] ?? '0'), parseInt(shortMatch[4] ?? '0'));
+      if (d.getTime() > now.getTime()) d.setFullYear(d.getFullYear() - 1);
       return d.toISOString();
     }
   }

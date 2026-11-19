@@ -99,10 +99,9 @@ export const SLOT_TEMPO_OVERRIDES: Record<
   Partial<Record<string, { checkDelayMs?: number; parseDelayMs?: number; dailyCap?: number }>>
 > = {
   C: { avito: { checkDelayMs: 105_000 } },
-  // 2026-11-17: эксперимент — avito на билайне (слот A) БЕЗ ЛОГИНА с паузой
-  // 2 минуты между запросами; проверяем, будут ли ip_block/капча при анонимном
-  // парсинге. По решению пользователя.
-  A: { avito: { checkDelayMs: 120_000 } },
+  // 2026-11-17: эксперимент «avito на слоте A без логина с паузой 2 мин» закрыт:
+  // анонимный парсинг ловит ip_block сразу (1 карточка → блок) даже с медленным
+  // темпом. Возврат к базе SOURCE_TEMPO (80 с).
 };
 
 /** Итоговый темп: базовый SOURCE_TEMPO + надстройка слота. */
@@ -255,6 +254,14 @@ export class UpdateManager {
    * (макс. 3.0) и держится, пока площадка не отдохнула 30 минут без WAF.
    */
   private tempoMultiplier = 1.0;
+
+  /**
+   * Прогрев картой перед следующим батчем (только avito).
+   * 17.11.2026: проверено вручную — страница карты поиска («Показать на карте»)
+   * снимает капчу/блок, и карточки, открытые после неё, грузятся без ip_block.
+   * Выставляется при старте и после каждого ip_block.
+   */
+  private needsWarmUp = true;
   private lastWafAt = 0;
   /** Последняя ошибка для heartbeat; null = воркер здоров (сервер сбрасывает last_error) */
   private lastError: string | null = null;
@@ -349,6 +356,12 @@ export class UpdateManager {
         // менеджеры). Штатно в профиле живут рабочая вкладка и метка.
         await this.cleanupStaleTabs();
 
+        // Прогрев картой (обход капчи/блока) — при старте и после ip_block.
+        if (this.needsWarmUp) {
+          await this.warmUpMap();
+          this.needsWarmUp = false;
+        }
+
         const claimed = await this.processBatch();
         if (!this.shouldStop && claimed > 0 && Date.now() >= this.cooldownUntil) {
           // очередь ещё не пуста — берём следующую порцию.
@@ -375,6 +388,27 @@ export class UpdateManager {
 
   stop() {
     this.shouldStop = true;
+  }
+
+  /**
+   * Прогрев: страница карты поиска («Показать на карте») перед батчем карточек.
+   * Гипотеза (17.11.2026, наблюдение пользователя): сценарий «человек смотрит
+   * карту» снимает капчу/блок, и следующие карточки грузятся чисто. Проверяется
+   * автоматически на первом же штатном ip_block. Метод перехватывает рабочую
+   * вкладку — следующий processAd навигирует её на карточку как обычно.
+   */
+  private async warmUpMap() {
+    if (this.settings.source !== 'avito' || !this.tabId) return;
+    const mapUrl =
+      'https://www.avito.ru/novosibirsk/kvartiry/prodam/on-map-ASgBAgICAkSSA8YQqt8VAg?localPriority=0&map=1';
+    try {
+      await navigateTab(this.tabId, mapUrl);
+      await waitForTabLoad(this.tabId, 15000);
+      await keepAliveSleep(this.jitter(6000));
+      console.log('[Updater] warm-up: карта поиска открыта (обход капчи)');
+    } catch (e) {
+      console.warn('[Updater] warm-up failed:', e);
+    }
   }
 
   /**
@@ -676,6 +710,8 @@ export class UpdateManager {
           // Темп на ip_block не трогаем: его гасит успех / смена IP / 30 мин тишины.
           this.lastWafAt = Date.now();
           this.lastError = `ip_block (strike ${this.consecutiveWaf}, tempo ×${this.tempoMultiplier.toFixed(2)})`;
+          // Следующий батч начнём с карты (обход капчи — см. warmUpMap).
+          this.needsWarmUp = true;
 
           for (const rest of inFlight) {
             await apiClient.release(rest, this.browserId, 'paused: ip_block').catch(() => {});
@@ -993,18 +1029,27 @@ export class UpdateManager {
     // Быстрая проба до parseDelay: мёртвую карточку закрываем сразу,
     // а ip_block/captcha/waf_block кидаем наверх, чтобы воркер замедлился.
     const probe = await this.probePage(tabId, ad.url);
+    let dead = false;
     if (probe === 'archived') {
-      console.log(`[Ad ${ad.id}] archived (probe), no parseDelay`);
-      return { status: 'archived' };
-    }
-    if (probe !== 'ok') {
+      if (this.settings.source !== 'cian') {
+        // Avito: закрытая карточка — заглушка без данных, парсить нечего.
+        console.log(`[Ad ${ad.id}] archived (probe), no parseDelay`);
+        return { status: 'archived' };
+      }
+      // Cian: закрытая карточка ещё отдаёт данные (цена, «Обновлено», ремонт,
+      // история цен) — это финальный снимок карточки для архива (data-server#49).
+      // Парсим: parseCianDetailPage не выходит рано на OfferUnpublished.
+      dead = true;
+    } else if (probe !== 'ok') {
       throw new Error(probe);
     }
 
-    // Короткий settle hydration: страница уже загружена (probe её читал),
-    // запрос к площадке уже ушёл. Ждать тут полный checkDelay — двойная
-    // задержка на живой карточке (70 с / 105 с) без выгоды для банов.
-    await this.parseDelaySleep(this.settings.parseDelayMs);
+    if (!dead) {
+      // Короткий settle hydration: страница уже загружена (probe её читал),
+      // запрос к площадке уже ушёл. Ждать тут полный checkDelay — двойная
+      // задержка на живой карточке (70 с / 105 с) без выгоды для банов.
+      await this.parseDelaySleep(this.settings.parseDelayMs);
+    }
 
     const parseFn = this.settings.source === 'avito' ? parseAvitoAd : parseCianAd;
     const parseResult = await retry(() => parseFn(tabId), 3, 3000);
