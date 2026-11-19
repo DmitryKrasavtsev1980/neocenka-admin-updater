@@ -118,10 +118,13 @@ export class LightChecker {
       for (const src of sources) {
         this.progress.source = src;
         let processed = 0;
+        // since — момент старта: сервер отдаёт только не проверенные после него.
+        // Когда пул пройден — выборка пуста, цикл завершается (без кругов).
+        const since = new Date().toISOString();
         while (processed < budget && !this.stopFlag) {
           const size = Math.min(PORTION, budget - processed);
           const d = await this.apiGet(
-            `${API_MONITOR}/lightcheck-urls?limit=${size}&source=${src}`
+            `${API_MONITOR}/lightcheck-urls?limit=${size}&source=${src}&since=${encodeURIComponent(since)}`
           ).catch(() => null);
           const items: Array<{ id: number; url: string }> = d?.items || [];
           if (d?.total) {
