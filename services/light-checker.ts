@@ -253,7 +253,7 @@ export class LightChecker {
 function extractCard(this: any): { status: string; price: string | null } {
   const body = document.body ? document.body.innerText.replace(/\s+/g, ' ') : '';
   const isCian = /cian\.ru/.test(location.host);
-  if (/доступ ограничен|проблема с ip|отключите VPN|отключите AdBlock|проверьте, что вы не робот/i.test(body)) {
+  if (/доступ ограничен|проблема с ip|отключите VPN|отключите AdBlock|проверьте, что вы не робот|обнаружен подозрительный трафик|cian_waf|rate limit/i.test(body)) {
     return { status: 'blocked', price: null };
   }
   let status = 'unknown';

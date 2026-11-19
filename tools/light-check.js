@@ -45,13 +45,19 @@ function wsCallUrl(url, method, params) {
 const EXTRACT = `(() => {
   const body = document.body ? document.body.innerText.replace(/\\s+/g, ' ') : '';
   const isCian = /cian\\.ru/.test(location.host);
+  // Блок/капча — отдельный статус: чекер обязан ПАУЗИТЬСЯ, а не долбить IP.
+  if (/доступ ограничен|проблема с ip|отключите VPN|отключите AdBlock|проверьте, что вы не робот|не робот|обнаружен подозрительный трафик|cian_waf|rate limit/i.test(body)) {
+    return JSON.stringify({ status: 'blocked', price: null, date: null, title: document.title.slice(0, 60) });
+  }
   let status = 'unknown';
   if (isCian) {
     // Cian: снятые карточки помечаются текстом, активные — служебными полями.
     if (/Объявление снято|снято с публикации|удалено|неактивно/i.test(body)) status = 'closed';
     else if (/Сравнить|Пожаловаться|Обновлено:/i.test(body)) status = 'active';
   } else {
-    if (/Объявление закрыто|Объявление истекло|Объявление не посмотреть/i.test(body)) status = 'closed';
+    // «Объявление не посмотреть» НЕ считаем снятием: бывает при временных
+    // проблемах/блоках (15-11 такие карточки ошибочно ушли в архив).
+    if (/Объявление закрыто|Объявление истекло/i.test(body)) status = 'closed';
     else if (/Добавить в избранное|Сравнить/i.test(body)) status = 'active';
   }
   let price = null;
@@ -114,12 +120,13 @@ const EXTRACT = `(() => {
 
   console.log(`light-check: ${urls.length} карточек, порт ${port}, пауза ${delaySec}s`);
   const results = [];
+  let blockStreak = 0;
   for (let i = 0; i < urls.length; i++) {
     const t0 = Date.now();
+    let data = null;
     try {
       await wsCallUrl(ws, 'Page.navigate', { url: urls[i] });
       // ждём загрузку (до 12 с), затем разбираем
-      let data = null;
       for (let k = 0; k < 8; k++) {
         await new Promise((r) => setTimeout(r, 1500));
         try {
@@ -138,6 +145,16 @@ const EXTRACT = `(() => {
       console.log(`[${i + 1}/${urls.length}] ${sec}s  ${data ? data.status : 'FAIL'}  ${data && data.price ? data.price + 'р' : '-'}  ${urls[i].split('/').pop().slice(0, 40)}`);
     } catch (e) {
       console.log(`[${i + 1}/${urls.length}] ERROR ${e.message}`);
+    }
+    // Блок = временный флуд-контроль: пауза НЕМЕДЛЕННО в момент блока
+    // (серия блоков = нарастающая пауза, максимум 10 минут).
+    if (data && data.status === 'blocked') {
+      blockStreak += 1;
+      const pause = Math.min(600, 60 * blockStreak);
+      console.log(`  !! БЛОК — пауза ${pause}с (серия ${blockStreak}), не долбим IP`);
+      await new Promise((r) => setTimeout(r, pause * 1000));
+    } else {
+      blockStreak = 0;
     }
     await new Promise((r) => setTimeout(r, delaySec * 1000));
   }
