@@ -42,17 +42,32 @@ function wsCallUrl(url, method, params) {
   });
 }
 
-const EXTRACT = `(() => {
+const EXTRACT = `(async () => {
   const body = document.body ? document.body.innerText.replace(/\\s+/g, ' ') : '';
   const isCian = /cian\\.ru/.test(location.host);
+  const out = { status: 'unknown', price: null, date: null, updated: null, renovation: null, photos: [], history: [], title: document.title.slice(0, 60) };
   // Блок/капча — отдельный статус: чекер обязан ПАУЗИТЬСЯ, а не долбить IP.
   if (/доступ ограничен|проблема с ip|отключите VPN|отключите AdBlock|проверьте, что вы не робот|не робот|обнаружен подозрительный трафик|cian_waf|rate limit/i.test(body)) {
-    return JSON.stringify({ status: 'blocked', price: null, date: null, title: document.title.slice(0, 60) });
+    out.status = 'blocked';
+    return JSON.stringify(out);
+  }
+  // Русская дата («9 сен, 12:07» / «5 авг 2026») -> YYYY-MM-DD.
+  const MON = { янв:1, фев:2, мар:3, апр:4, мая:5, май:5, июн:6, июл:7, авг:8, сен:9, окт:10, ноя:11, дек:12 };
+  function ruDate(s) {
+    const m = String(s || '').match(/(\\d{1,2})\\s+([а-я]{3})[^0-9]*(\\d{4})?/i);
+    if (!m) return null;
+    const mo = MON[m[2].toLowerCase()];
+    if (!mo) return null;
+    let y = m[3] ? +m[3] : new Date().getFullYear();
+    if (!m[3] && mo > new Date().getMonth() + 1) y -= 1;
+    return y + '-' + String(mo).padStart(2, '0') + '-' + String(m[1]).padStart(2, '0');
   }
   let status = 'unknown';
   if (isCian) {
-    // Cian: снятые карточки помечаются текстом, активные — служебными полями.
-    if (/Объявление снято|снято с публикации|удалено|неактивно/i.test(body)) status = 'closed';
+    // Точный маркер снятой карточки + точные фразы. Широкие «удалено|неактивно»
+    // убраны — ловили текст в описаниях и давали ложные архивации.
+    const unpub = !!document.querySelector('[data-name="OfferUnpublished"]');
+    if (unpub || /Объявление снято|снято с публикации|объявление удалено|объявление не найдено|страница не найдена/i.test(body)) status = 'closed';
     else if (/Сравнить|Пожаловаться|Обновлено:/i.test(body)) status = 'active';
   } else {
     // «Объявление не посмотреть» НЕ считаем снятием: бывает при временных
@@ -60,6 +75,7 @@ const EXTRACT = `(() => {
     if (/Объявление закрыто|Объявление истекло/i.test(body)) status = 'closed';
     else if (/Добавить в избранное|Сравнить/i.test(body)) status = 'active';
   }
+  out.status = status;
   let price = null;
   // Приоритет источников цены: itemprop -> testid (cian) -> data-marker.
   for (const sel of ['[itemprop="price"]', '[data-testid="price-amount"]', '[data-marker*="price"]']) {
@@ -75,14 +91,65 @@ const EXTRACT = `(() => {
     const m = body.match(/(\\d[\\d\\s]{2,})\\s*[₽руб]/);
     if (m) price = m[1].replace(/\\s/g, '');
   }
-  let date = null;
-  const de = document.querySelector('[data-marker="item-date"], time');
-  if (de) date = (de.getAttribute('datetime') || de.textContent || '').trim().slice(0, 30);
-  if (!date && isCian) {
-    const m = body.match(/Обновлено:\\s*([^,]+,\\s*\\d+:\\d+)/);
-    if (m) date = m[1].trim();
+  out.price = price;
+  if (isCian) {
+    // Дата «Обновлено: 9 сен, 12:07» -> ISO (дата площадки, важна при закрытии).
+    const dm = body.match(/Обновлено:\\s*(\\d{1,2}\\s+[а-я]{3}[^,]*,?\\s*\\d{1,2}:\\d{2})/i);
+    if (dm) { out.updated = ruDate(dm[1]); out.date = dm[1].trim(); }
+    // Ремонт из фактойдов: «РемонтБез ремонта» / «ОтделкаКосметический».
+    for (const el of Array.from(document.querySelectorAll('[data-name="ObjectFactoidsItem"], [data-testid="OfferSummaryInfoItem"]'))) {
+      const t = (el.textContent || '').trim();
+      const m = t.match(/^(Ремонт|Отделка)\\s*:?[\\s]*(.+)$/i);
+      if (!m) continue;
+      const v = m[2].toLowerCase().replace(/ё/g, 'е');
+      if (/без\\s*отделк|без\\s*ремонт|предчистов|чернов|требует\\s*ремонт/.test(v)) out.renovation = 'without';
+      else if (/космет/.test(v)) out.renovation = 'cosmetic';
+      else if (/дизайнер/.test(v)) out.renovation = 'designer';
+      else if (/евро/.test(v)) out.renovation = 'euro';
+      else if (/чистов|под\\s*ключ/.test(v)) out.renovation = 'cosmetic';
+      break;
+    }
+    // Фото-ссылки (на закрытой карточке галереи нет — вернётся пусто).
+    const seen = new Set();
+    for (const img of Array.from(document.querySelectorAll('#photos img[src*="images.cdn-cian.ru/images/"], [class*="photo_gallery_container"] img[src*="images.cdn-cian.ru/images/"]'))) {
+      const src = (img.src || '').split('?')[0];
+      const idm = src.match(/\\/(\\d+)-/);
+      const key = idm ? idm[1] : src;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.photos.push(src);
+      if (out.photos.length >= 40) break;
+    }
+    // История цен: DOM-виджет раскрывается кликом (API price-estimator не
+    // отвечает). Работает и на закрытой карточке — финальная история.
+    const parseHist = () => {
+      const rows = [];
+      for (const tr of Array.from(document.querySelectorAll('table tr'))) {
+        const c = Array.from(tr.children).map(td => (td.textContent || '').trim());
+        if (c.length < 2) continue;
+        const d = ruDate(c[0]);
+        const pm = (c[1] || '').match(/([\\d\\s]{3,})/);
+        if (!d || !pm) continue;
+        rows.push({ date: d, price: parseInt(pm[1].replace(/\\s/g, ''), 10) });
+      }
+      return rows;
+    };
+    out.history = parseHist();
+    if (out.history.length === 0) {
+      const w = document.querySelector('[data-testid="price-history-widget"]');
+      if (w) {
+        w.click();
+        await new Promise(r => setTimeout(r, 1500));
+        out.history = parseHist();
+      }
+    }
+  } else {
+    const de = document.querySelector('[data-marker="item-date"], time');
+    if (de) out.date = (de.getAttribute('datetime') || de.textContent || '').trim().slice(0, 30);
   }
-  return JSON.stringify({ status, price, date, title: document.title.slice(0, 60), uaMobile: /Mobile|Android/i.test(navigator.userAgent), innerW: window.innerWidth });
+  out.uaMobile = /Mobile|Android/i.test(navigator.userAgent);
+  out.innerW = window.innerWidth;
+  return JSON.stringify(out);
 })()`;
 
 (async () => {

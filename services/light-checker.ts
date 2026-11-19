@@ -170,9 +170,9 @@ export class LightChecker {
     // Счётчики уже обновлены по карточкам в checkPortion (живой прогресс).
   }
 
-  /** Порция: открыть каждую карточку в рабочей вкладке и вытащить статус/цену. */
+  /** Порция: открыть каждую карточку в рабочей вкладке и вытащить данные. */
   private async checkPortion(items: Array<{ id: number; url: string }>) {
-    const rows: Array<{ id: number; url: string; status: string; price: string | null }> = [];
+    const rows: Array<{ id: number; url: string } & CardExtract> = [];
     if (!this.tabId) {
       const t = await chrome.tabs.create({ url: items[0].url, active: false });
       this.tabId = t.id!;
@@ -187,7 +187,7 @@ export class LightChecker {
           target: { tabId: this.tabId },
           func: extractCard,
         });
-        const data = res?.[0]?.result || { status: 'unknown', price: null };
+        const data: CardExtract = res?.[0]?.result || { status: 'unknown', price: null, date: null, updated: null, renovation: null, photos: [], history: [] };
         rows.push({ id: it.id, url: it.url, ...data });
         // Живой прогресс в popup после каждой карточки (по источникам).
         this.progress.checked++;
@@ -197,7 +197,7 @@ export class LightChecker {
         if (data.status === 'blocked') this.progress.blocked++;
         this.publish();
       } catch {
-        rows.push({ id: it.id, url: it.url, status: 'unknown', price: null });
+        rows.push({ id: it.id, url: it.url, status: 'unknown', price: null, date: null, updated: null, renovation: null, photos: [], history: [] });
       }
       await new Promise((r) => setTimeout(r, CARD_DELAY_MS));
     }
@@ -219,11 +219,13 @@ export class LightChecker {
   }
 
   /**
-   * Результаты -> сервер; ИЗМЕНЕНИЯ (цена/снятие) -> очередь полного парсинга.
-   * Дифф цен делает СЕРВЕР (его снимок = сама база) и возвращает changed_ids —
-   * воркеры полного парсинга подхватят их сами (explicit-направление, FIFO).
+   * Результаты -> сервер (полные данные, data-server#49):
+   *  - active: цена/ремонт/фото/история пишутся сразу (сервер решает, что изменилось);
+   *  - closed: сервер закрывает через общий механизм с финальным снимком карточки.
+   * ИЗМЕНЕНИЯ ЦЕН -> очередь полного парсинга: дифф делает СЕРВЕР (его снимок =
+   * сама база) и возвращает changed_ids — воркеры подхватят их сами.
    */
-  private async report(rows: Array<{ id: number; url: string; status: string; price: string | null }>) {
+  private async report(rows: Array<{ id: number; url: string } & CardExtract>) {
     const send = rows.filter((r) => r.status === 'active' || r.status === 'closed');
     if (!send.length) return;
     const resp = await this.apiPost(`${API_MONITOR}/lightcheck-report`, {
@@ -231,40 +233,76 @@ export class LightChecker {
         id: r.id,
         status: r.status,
         price: r.price ? Number(r.price) : null,
+        updated: r.updated ?? null,
+        renovation_type: r.renovation ?? null,
+        price_history: r.history?.length ? r.history : null,
+        photos: r.photos?.length ? r.photos : null,
       })),
     }).catch(() => null);
-    // ВРЕМЕННО: изменения цен не отправляем — формат цены light-чека
-    // расходится с базой («от N», скидки) и даёт ложные изменения (949 из
-    // 1311 за прогон 18.11). Отправляем только СНЯТЫЕ (точный факт).
-    // TODO: нормализовать цену/сравнение — вернуть price-события.
-    const closedIds = send.filter((r) => r.status === 'closed').map((r) => r.id);
-    const changed: number[] = closedIds;
+    // Дифф цен делает СЕРВЕР (снимок = сама база) — changed_ids идёт в очередь
+    // ПОЛНОГО парсинга (explicit, FIFO): страховка + продавец/полные фото.
+    const changed: number[] = (resp?.changed_ids as number[] | undefined) || [];
     if (changed.length) {
       await this.apiPost('/api/update/tasks', {
         filter_data: { ids: changed },
-        name: 'Light-чек: изменения цен/снятие (авто)',
+        name: 'Light-чек: изменения цен (авто)',
       }).catch(() => null);
       this.progress.repriced += changed.length;
     }
   }
 }
 
-/** Функция, выполняемая НА СТРАНИЦЕ карточки (и avito, и cian). */
-function extractCard(this: any): { status: string; price: string | null } {
+/** Результат лёгкой проверки карточки (data-server#49: полные данные). */
+interface CardExtract {
+  status: string;
+  price: string | null;
+  date: string | null;
+  updated: string | null;
+  renovation: string | null;
+  photos: string[];
+  history: Array<{ date: string; price: number }>;
+}
+
+/**
+ * Функция, выполняемая НА СТРАНИЦЕ карточки (и avito, и cian).
+ * Собирает всё, что доступно лёгкой проверке (data-server#49):
+ *  - Cian: цена, дата «Обновлено» (ISO), ремонт из фактойдов, фото-ссылки,
+ *    история цен (DOM-виджет раскрывается кликом — работает и на закрытой
+ *    карточке, API price-estimator не отвечает);
+ *  - Avito: цена/дата (фото/история — из hydration, фаза 2).
+ */
+async function extractCard(this: any): Promise<CardExtract> {
   const body = document.body ? document.body.innerText.replace(/\s+/g, ' ') : '';
   const isCian = /cian\.ru/.test(location.host);
+  const out: CardExtract = { status: 'unknown', price: null, date: null, updated: null, renovation: null, photos: [], history: [] };
   if (/доступ ограничен|проблема с ip|отключите VPN|отключите AdBlock|проверьте, что вы не робот|обнаружен подозрительный трафик|cian_waf|rate limit/i.test(body)) {
-    return { status: 'blocked', price: null };
+    out.status = 'blocked';
+    return out;
   }
+  // Русская дата («9 сен, 12:07» / «5 авг 2026») -> YYYY-MM-DD.
+  const MON: Record<string, number> = { янв: 1, фев: 2, мар: 3, апр: 4, мая: 5, май: 5, июн: 6, июл: 7, авг: 8, сен: 9, окт: 10, ноя: 11, дек: 12 };
+  const ruDate = (s: string): string | null => {
+    const m = String(s || '').match(/(\d{1,2})\s+([а-я]{3})[^0-9]*(\d{4})?/i);
+    if (!m) return null;
+    const mo = MON[m[2].toLowerCase()];
+    if (!mo) return null;
+    let y = m[3] ? +m[3] : new Date().getFullYear();
+    if (!m[3] && mo > new Date().getMonth() + 1) y -= 1;
+    return y + '-' + String(mo).padStart(2, '0') + '-' + String(m[1]).padStart(2, '0');
+  };
   let status = 'unknown';
   if (isCian) {
-    if (/Объявление снято|снято с публикации|удалено|неактивно/i.test(body)) status = 'closed';
+    // Точный маркер снятой карточки + точные фразы. Широкие «удалено|неактивно»
+    // убраны — ловили текст в описаниях и давали ложные архивации.
+    const unpub = !!document.querySelector('[data-name="OfferUnpublished"]');
+    if (unpub || /Объявление снято|снято с публикации|объявление удалено|объявление не найдено|страница не найдена/i.test(body)) status = 'closed';
     else if (/Сравнить|Пожаловаться|Обновлено:/i.test(body)) status = 'active';
   } else {
     // «Объявление не посмотреть» — НЕ снятие (бывает при временных проблемах).
     if (/Объявление закрыто|Объявление истекло/i.test(body)) status = 'closed';
     else if (/Добавить в избранное|Сравнить/i.test(body)) status = 'active';
   }
+  out.status = status;
   let price: string | null = null;
   for (const sel of ['[itemprop="price"]', '[data-testid="price-amount"]', '[data-marker*="price"]']) {
     const el = document.querySelector(sel);
@@ -277,5 +315,61 @@ function extractCard(this: any): { status: string; price: string | null } {
     const m = price.match(/[\d\s]{3,}/);
     price = m ? m[0].replace(/\s/g, '') : null;
   }
-  return { status, price };
+  out.price = price;
+  if (isCian) {
+    // Дата «Обновлено: 9 сен, 12:07» -> ISO (дата площадки, важна при закрытии).
+    const dm = body.match(/Обновлено:\s*(\d{1,2}\s+[а-я]{3}[^,]*,?\s*\d{1,2}:\d{2})/i);
+    if (dm) { out.updated = ruDate(dm[1]); out.date = dm[1].trim(); }
+    // Ремонт из фактойдов: «РемонтБез ремонта» / «ОтделкаКосметический».
+    for (const el of Array.from(document.querySelectorAll('[data-name="ObjectFactoidsItem"], [data-testid="OfferSummaryInfoItem"]'))) {
+      const t = (el.textContent || '').trim();
+      const m = t.match(/^(Ремонт|Отделка)\s*:?\s*(.+)$/i);
+      if (!m) continue;
+      const v = m[2].toLowerCase().replace(/ё/g, 'е');
+      if (/без\s*отделк|без\s*ремонт|предчистов|чернов|требует\s*ремонт/.test(v)) out.renovation = 'without';
+      else if (/космет/.test(v)) out.renovation = 'cosmetic';
+      else if (/дизайнер/.test(v)) out.renovation = 'designer';
+      else if (/евро/.test(v)) out.renovation = 'euro';
+      else if (/чистов|под\s*ключ/.test(v)) out.renovation = 'cosmetic';
+      break;
+    }
+    // Фото-ссылки (на закрытой карточке галереи нет — вернётся пусто).
+    const seen = new Set<string>();
+    for (const img of Array.from(document.querySelectorAll('#photos img[src*="images.cdn-cian.ru/images/"], [class*="photo_gallery_container"] img[src*="images.cdn-cian.ru/images/"]'))) {
+      const src = (((img as HTMLImageElement).src) || '').split('?')[0];
+      const idm = src.match(/\/(\d+)-/);
+      const key = idm ? idm[1] : src;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.photos.push(src);
+      if (out.photos.length >= 40) break;
+    }
+    // История цен: DOM-виджет раскрывается кликом (работает и на закрытой
+    // карточке — финальная история). API price-estimator не отвечает (CORS).
+    const parseHist = (): Array<{ date: string; price: number }> => {
+      const rows: Array<{ date: string; price: number }> = [];
+      for (const tr of Array.from(document.querySelectorAll('table tr'))) {
+        const c = Array.from(tr.children).map(td => (td.textContent || '').trim());
+        if (c.length < 2) continue;
+        const d = ruDate(c[0]);
+        const pm = (c[1] || '').match(/([\d\s]{3,})/);
+        if (!d || !pm) continue;
+        rows.push({ date: d, price: parseInt(pm[1].replace(/\s/g, ''), 10) });
+      }
+      return rows;
+    };
+    out.history = parseHist();
+    if (out.history.length === 0) {
+      const w = document.querySelector('[data-testid="price-history-widget"]') as HTMLElement | null;
+      if (w) {
+        w.click();
+        await new Promise(r => setTimeout(r, 1500));
+        out.history = parseHist();
+      }
+    }
+  } else {
+    const de = document.querySelector('[data-marker="item-date"], time');
+    if (de) out.date = ((de as HTMLElement).getAttribute('datetime') || de.textContent || '').trim().slice(0, 30);
+  }
+  return out;
 }
