@@ -1,16 +1,31 @@
 /**
  * LightChecker — лёгкая проверка статусов объявлений (без аккаунта).
  *
- * Схема (обсуждена с владельцем 18.11.2026):
- *   порция карточек с сервера (области «В работе», avito/cian)
- *   -> проверка статуса/цены со страницы (быстро, ~2с)
- *   -> НЕМЕДЛЕННАЯ обратная запись (POST light-check-report:
- *      активным updated=now, снятым status=archived)
- *   -> изменения цен/статусов -> очередь полного парсинга (ids)
+ * Масштабируемая модель (обсуждена с владельцем 24.11.2026):
+ *   очередь update_queue (kind=light) → атомарный claim → быстрая проверка
+ *   карточки (~2 с) → complete-light батчем.
  *
- * Блок/капча — волна проходит сама: пауза только при ПЛОТНОМ блоке
- * (несколько подряд без просвета). Управление — из popup (LIGHT_START/STOP).
+ *   - снятые закрываются (общий AdCloseService, финальный снимок);
+ *   - активные освежаются (цена/ремонт/фото/история пишутся сразу);
+ *   - изменённые по цене → сервер сам отдаёт в очередь ПОЛНОГО парсинга
+ *     (kind=full: страховка + продавец/полные фото);
+ *   - блок площадки / не загрузилась → строка возвращается в очередь.
+ *
+ * Очередь кормят: актуализация областей (kind=light), досып поддержки
+ * (update:enqueue-support) и авто-досып воркера. Воркер просто ждёт задачи —
+ * можно гнать сколько угодно воркеров на разных модемах: клейм атомарный,
+ * дублей не будет. Управление — из popup (LIGHT_START/STOP).
  */
+
+import { apiClient } from './api-client';
+import type { ClaimedAd, LightResult } from '../types';
+
+const PORTION = 30;
+const CARD_DELAY_MS = 5000;
+/** Пульс во время проверки: продлевает аренду строк + держит SW живым */
+const HEARTBEAT_MS = 60_000;
+/** Пауза когда очередь пуста (дежурный режим «ждёт задачи») */
+const IDLE_WAIT_MS = 5 * 60_000;
 
 export interface SourceProgress {
   checked: number;
@@ -20,20 +35,16 @@ export interface SourceProgress {
 export interface LightProgress {
   running: boolean;
   stage: string;
-  checked: number;      // всего проверено (оба источника)
-  total: number;        // всего в пулах (оба источника)
-  sources: Record<string, SourceProgress>;  // avito/cian отдельно
+  checked: number;
+  total: number;
+  sources: Record<string, SourceProgress>;
   blocked: number;
   closed: number;
   repriced: number;
   source: string;
-  /** id профиля браузера (см. setInstanceId): свой протухший прогресс vs чужой. */
+  /** id профиля браузера — он же browser_id в очереди */
   instanceId?: string;
 }
-
-const API_MONITOR = '/api/monitor';
-const PORTION = 150;
-const CARD_DELAY_MS = 5000;
 
 export class LightChecker {
   private running = false;
@@ -47,18 +58,6 @@ export class LightChecker {
   };
   private onUpdate: ((p: LightProgress) => void) | null = null;
 
-  constructor(private apiUrl: string = 'https://54.neocenka.ru') {}
-
-  /**
-   * id этого профиля браузера (генерируется service-worker'ом, живёт в
-   * chrome.storage.local). Публикуется в сквозной прогресс: по нему popup
-   * отличает «идёт в другом профиле» от «мой SW упал и прогресс протух».
-   */
-  setInstanceId(id: string) {
-    this.instanceId = id;
-    this.progress.instanceId = id;
-  }
-
   onProgress(cb: (p: LightProgress) => void) {
     this.onUpdate = cb;
   }
@@ -67,154 +66,209 @@ export class LightChecker {
     return { ...this.progress };
   }
 
+  /**
+   * id этого профиля браузера — он же browser_id очереди: по нему
+   * строки арендуются за воркером и видны в мониторинге.
+   */
+  setInstanceId(id: string) {
+    this.instanceId = id;
+    this.progress.instanceId = id;
+  }
+
   stop() {
     this.stopFlag = true;
     this.progress.stage = 'остановка...';
     this.publish();
   }
 
-  private lastPublishAt = 0;
-
   private publish() {
     this.progress.running = this.running;
     if (this.instanceId) this.progress.instanceId = this.instanceId;
     if (this.onUpdate) this.onUpdate(this.getProgress());
     chrome.runtime.sendMessage({ type: 'LIGHT_PROGRESS', ...this.getProgress() }).catch(() => {});
-    // Сквозной статус на сервер: popup ЛЮБОГО профиля видит прогресс
-    // (throttle — раз в 3 секунды, события каждую карточку).
-    const now = Date.now();
-    if (now - this.lastPublishAt > 3000 || !this.progress.running) {
-      this.lastPublishAt = now;
-      this.apiPost(`${API_MONITOR}/lightcheck-progress`, { progress: this.getProgress() }).catch(() => {});
-    }
   }
 
   /**
-   * Длинная пауза дольными сердцебиениями вместо одного setTimeout.
-   *
-   * MV3 убивает service worker после ~30 с бездействия — тихий setTimeout
-   * на 5 минут убивал и LightChecker, и проверка «отжималась» (кнопка в
-   * popup снова показывала «остановлен»). Publish каждые 30 с держит SW
-   * живым (fetch сбрасывает таймер бездействия) и не даёт серверной
-   * stale-защите (5 мин) засчитать прогресс мёртвым.
+   * Дежурный цикл: claim → проверка → complete-light. Пустая очередь —
+   * тихое ожидание с пульсом (пульс продлевает аренду строк и держит
+   * service worker живым — иначе MV3 убивает его после 30 с бездействия).
    */
-  private async sleep(ms: number) {
-    const step = 30_000;
-    const deadline = Date.now() + ms;
-    while (!this.stopFlag && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, Math.min(step, deadline - Date.now())));
-      if (!this.stopFlag) this.publish();
-    }
-  }
-
-  /** Глобальный статус с сервера (если проверка идёт в другом профиле). */
-  static async fetchGlobal(apiUrl: string = 'https://54.neocenka.ru'): Promise<LightProgress | null> {
-    try {
-      const r = await fetch(apiUrl + API_MONITOR + '/lightcheck-progress');
-      const d = await r.json();
-      return d?.progress || null;
-    } catch {
-      return null;
-    }
-  }
-
-  private async apiGet(path: string): Promise<any> {
-    const r = await fetch(this.apiUrl + path);
-    return r.json();
-  }
-
-  private async apiPost(path: string, body: any): Promise<any> {
-    const r = await fetch(this.apiUrl + path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    return r.json();
-  }
-
-  /**
-   * Запуск проверки: сначала avito, потом cian (budget — на каждый).
-   */
-  async start(sources: string[] = ['avito', 'cian'], budget = 100000) {
-    if (this.running) return { error: 'уже работает' };
+  async start(): Promise<{ ok: boolean; error?: string }> {
+    if (this.running) return { ok: false, error: 'уже работает' };
     this.running = true;
     this.stopFlag = false;
     this.progress = {
-      running: true, stage: 'старт', checked: 0, total: 0,
+      ...this.progress,
+      running: true,
+      stage: 'старт',
+      checked: 0, total: 0,
       sources: { avito: { checked: 0, total: 0 }, cian: { checked: 0, total: 0 } },
-      blocked: 0, closed: 0, repriced: 0, source: sources[0],
+      blocked: 0, closed: 0, repriced: 0,
     };
     this.publish();
 
     try {
-      // ДЕЖУРНАЯ схема: работаем, пока пользователь не нажал «Стоп».
-      // Пустой пул — это НЕ завершение: карточки «протухают» по мере
-      // обновления, новые появляются — ждём и опрашиваем снова (раньше
-      // пул пустовал → break → «проверка завершилась», и это путало:
-      // непонятно, подхватит ли расширение новые объявления).
       while (!this.stopFlag) {
-        let gotAny = false;
-        for (const src of sources) {
-          if (this.stopFlag) break;
-          this.progress.source = src;
-          const size = PORTION;
-          const d = await this.apiGet(
-            `${API_MONITOR}/lightcheck-urls?limit=${size}&source=${src}&stale_days=1`
-          ).catch(() => null);
-          const items: Array<{ id: number; url: string }> = d?.items || [];
-          this.progress.sources[src] = this.progress.sources[src] || { checked: 0, total: 0 };
-          if (d?.total) {
-            this.progress.sources[src].total = d.total;
-            this.progress.total = Object.values(this.progress.sources)
-              .reduce((a, sp) => a + (sp.total || 0), 0);
-          }
-          if (!items.length) {
-            this.progress.stage = `${src}: жду новые карточки…`;
-            this.publish();
-            continue;
-          }
-          gotAny = true;
-          this.progress.stage = `${src}: проверяю порцию ${items.length}...`;
-          this.publish();
+        this.progress.stage = 'жду задачи в очереди...';
+        this.publish();
 
-          const rows = await this.checkPortion(items);
-          // Обратная запись СРАЗУ — сервер знает свежесть каждой карточки.
-          await this.report(rows);
-          this.tally(rows);
-          this.progress.stage = `${src}: проверено ${this.progress.checked}`;
+        let batch: ClaimedAd[] = [];
+        try {
+          // source=null — воркер берёт обе площадки: extractCard сам
+          // определяет сайт по URL.
+          batch = await apiClient.claim(this.instanceId, null, PORTION, 'light');
+        } catch (e: any) {
+          this.progress.stage = 'ошибка связи: ' + (e?.message || e);
           this.publish();
-
-          // Волна блоков: пауза только при плотной серии.
-          const streak = rows.filter((r) => r.status === 'blocked').length;
-          if (streak >= 3) {
-            this.progress.stage = 'плотный блок — пауза 2 мин';
-            this.publish();
-            await this.sleep(120000);
-          }
+          await this.sleep(IDLE_WAIT_MS);
+          continue;
         }
-        if (!gotAny && !this.stopFlag) {
-          // Оба пула пусты — тихое ожидание с опросом каждые 5 минут,
-          // статус «работает» не снимается (кнопка «Запустить» остаётся
-          // заблокированной, пока пользователь не нажмёт «Стоп»).
-          this.progress.stage = 'ожидание новых карточек…';
+
+        if (!batch.length) {
+          this.progress.stage = 'ожидание задач в очереди…';
           this.publish();
-          await this.sleep(5 * 60 * 1000);
+          await this.sleep(IDLE_WAIT_MS);
+          continue;
+        }
+
+        this.progress.total += batch.length;
+        for (const b of batch) {
+          const src = b.source === 'cian.ru' ? 'cian' : 'avito';
+          this.progress.sources[src].total = (this.progress.sources[src].total ?? 0) + 1;
+        }
+        this.progress.stage = `проверяю порцию ${batch.length}...`;
+        this.publish();
+
+        const results = await this.checkPortion(batch);
+        await this.report(results);
+
+        // Волна блоков: пауза только при плотной серии.
+        const streak = results.filter((r) => r.status === 'blocked').length;
+        if (streak >= 3 && !this.stopFlag) {
+          this.progress.stage = 'плотный блок — пауза 2 мин';
+          this.publish();
+          await this.sleep(120_000);
         }
       }
     } catch (e: any) {
       this.progress.stage = 'ошибка: ' + (e?.message || e);
     }
+
     this.running = false;
     this.progress.stage = 'остановлено';
     this.publish();
     await this.closeTab();
-    return { ok: true, ...this.progress };
+    return { ok: true };
   }
 
   /**
-   * Вкладка карточки живёт между перезапусками SW: tabId храним в
-   * chrome.storage.local, при старте переиспользуем живую вкладку (иначе
-   * каждый duty-restart плодил бы новую), при завершении — закрываем.
+   * Портция: каждую карточку открыть в рабочей вкладке и вытащить данные.
+   * Пульс каждые ~60 с продлевает аренду необработанных строк — порция в 30
+   * карточек при 5 с/карточку живёт ~2.5 мин, аренда 10 мин не протухает.
+   */
+  private async checkPortion(batch: ClaimedAd[]): Promise<LightResult[]> {
+    const results: LightResult[] = [];
+    const tabId = await this.openTab(batch[0].url);
+    let lastBeat = Date.now();
+    for (const item of batch) {
+      if (this.stopFlag) break;
+
+      if (Date.now() - lastBeat > HEARTBEAT_MS) {
+        lastBeat = Date.now();
+        const held = batch.filter((b) => !results.some((r) => r.queue_id === b.queue_id))
+          .map((b) => b.queue_id);
+        apiClient
+          .heartbeat(this.instanceId, null, {
+            processed: this.progress.checked,
+            matched: this.progress.closed,
+            errors: this.progress.blocked,
+          }, held)
+          .catch(() => {});
+      }
+
+      try {
+        await chrome.tabs.update(tabId, { url: item.url });
+        await this.waitLoad(tabId);
+        await new Promise((r) => setTimeout(r, 1500));
+        const res = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: extractCard,
+        });
+        const data: CardExtract = res?.[0]?.result ?? { status: 'unknown', price: null, date: null, updated: null, renovation: null, photos: [], history: [] };
+
+        this.progress.checked++;
+        const src = item.source === 'cian.ru' ? 'cian' : 'avito';
+        const sp = this.progress.sources[src];
+        if (sp) sp.checked++;
+        if (data.status === 'closed') this.progress.closed++;
+        if (data.status === 'blocked') this.progress.blocked++;
+
+        results.push({
+          queue_id: item.queue_id,
+          id: item.id,
+          status: data.status,
+          price: data.price ? Number(data.price) : null,
+          updated: data.updated ?? null,
+          renovation_type: data.renovation ?? null,
+          price_history: data.history?.length ? data.history : null,
+          photos: data.photos?.length ? data.photos : null,
+          ...(data.status === 'blocked' ? { error: 'paused: blocked' } : {}),
+          ...(data.status === 'unknown' ? { error: 'light: unknown' } : {}),
+        });
+      } catch (e: any) {
+        results.push({
+          queue_id: item.queue_id,
+          id: item.id,
+          status: 'unknown',
+          error: 'light: ' + (e?.message || 'extract failed'),
+        });
+      }
+      this.publish();
+      await new Promise((r) => setTimeout(r, CARD_DELAY_MS));
+    }
+    return results;
+  }
+
+  /**
+   * Батч → сервер (complete-light): строки закрываются/возвращаются,
+   * изменённые по цене сами уходят в полный парсинг.
+   */
+  private async report(results: LightResult[]) {
+    if (!results.length) return;
+    try {
+      const resp = await apiClient.completeLight(this.instanceId, results);
+      if (resp?.changed_ids?.length) {
+        this.progress.repriced += resp.changed_ids.length;
+      }
+    } catch (e) {
+      // Связь упала — строки протухнут по аренде (10 мин) и достанутся снова.
+      this.progress.stage = 'ошибка отправки, строки вернутся в очередь';
+    }
+    this.publish();
+  }
+
+  /** Пауза с пульсом: держит SW живым и продлевает аренду строк */
+  private async sleep(ms: number) {
+    const step = 30_000;
+    const deadline = Date.now() + ms;
+    while (!this.stopFlag && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, Math.min(step, deadline - Date.now())));
+      if (!this.stopFlag) {
+        apiClient
+          .heartbeat(this.instanceId, null, {
+            processed: this.progress.checked,
+            matched: this.progress.closed,
+            errors: this.progress.blocked,
+          })
+          .catch(() => {});
+        this.publish();
+      }
+    }
+  }
+
+  /**
+   * Вкладка карточки живёт между порциями (tabId в storage) — переиспользуем,
+   * чтобы каждая порция не плодила вкладки.
    */
   private async openTab(url: string): Promise<number> {
     if (this.tabId != null) return this.tabId;
@@ -242,41 +296,6 @@ export class LightChecker {
     }
   }
 
-  private tally(_rows: Array<{ status: string }>) {
-    // Счётчики уже обновлены по карточкам в checkPortion (живой прогресс).
-  }
-
-  /** Порция: открыть каждую карточку в рабочей вкладке и вытащить данные. */
-  private async checkPortion(items: Array<{ id: number; url: string }>) {
-    const rows: Array<{ id: number; url: string } & CardExtract> = [];
-    const tabId = await this.openTab(items[0].url);
-    for (const it of items) {
-      if (this.stopFlag) break;
-      try {
-        await chrome.tabs.update(tabId, { url: it.url });
-        await this.waitLoad(tabId);
-        await new Promise((r) => setTimeout(r, 1500));
-        const res = await chrome.scripting.executeScript({
-          target: { tabId },
-          func: extractCard,
-        });
-        const data: CardExtract = res?.[0]?.result || { status: 'unknown', price: null, date: null, updated: null, renovation: null, photos: [], history: [] };
-        rows.push({ id: it.id, url: it.url, ...data });
-        // Живой прогресс в popup после каждой карточки (по источникам).
-        this.progress.checked++;
-        const sp = this.progress.sources[this.progress.source];
-        if (sp) sp.checked++;
-        if (data.status === 'closed') this.progress.closed++;
-        if (data.status === 'blocked') this.progress.blocked++;
-        this.publish();
-      } catch {
-        rows.push({ id: it.id, url: it.url, status: 'unknown', price: null, date: null, updated: null, renovation: null, photos: [], history: [] });
-      }
-      await new Promise((r) => setTimeout(r, CARD_DELAY_MS));
-    }
-    return rows;
-  }
-
   private waitLoad(tabId: number): Promise<void> {
     return new Promise((resolve) => {
       const done = () => {
@@ -289,39 +308,6 @@ export class LightChecker {
       chrome.tabs.onUpdated.addListener(listener);
       setTimeout(done, 12000);
     });
-  }
-
-  /**
-   * Результаты -> сервер (полные данные, data-server#49):
-   *  - active: цена/ремонт/фото/история пишутся сразу (сервер решает, что изменилось);
-   *  - closed: сервер закрывает через общий механизм с финальным снимком карточки.
-   * ИЗМЕНЕНИЯ ЦЕН -> очередь полного парсинга: дифф делает СЕРВЕР (его снимок =
-   * сама база) и возвращает changed_ids — воркеры подхватят их сами.
-   */
-  private async report(rows: Array<{ id: number; url: string } & CardExtract>) {
-    const send = rows.filter((r) => r.status === 'active' || r.status === 'closed');
-    if (!send.length) return;
-    const resp = await this.apiPost(`${API_MONITOR}/lightcheck-report`, {
-      results: send.map((r) => ({
-        id: r.id,
-        status: r.status,
-        price: r.price ? Number(r.price) : null,
-        updated: r.updated ?? null,
-        renovation_type: r.renovation ?? null,
-        price_history: r.history?.length ? r.history : null,
-        photos: r.photos?.length ? r.photos : null,
-      })),
-    }).catch(() => null);
-    // Дифф цен делает СЕРВЕР (снимок = сама база) — changed_ids идёт в очередь
-    // ПОЛНОГО парсинга (explicit, FIFO): страховка + продавец/полные фото.
-    const changed: number[] = (resp?.changed_ids as number[] | undefined) || [];
-    if (changed.length) {
-      await this.apiPost('/api/update/tasks', {
-        filter_data: { ids: changed },
-        name: 'Light-чек: изменения цен (авто)',
-      }).catch(() => null);
-      this.progress.repriced += changed.length;
-    }
   }
 }
 

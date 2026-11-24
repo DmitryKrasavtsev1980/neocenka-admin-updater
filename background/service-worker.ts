@@ -3,25 +3,9 @@
  */
 
 import { UpdateManager, DEFAULT_API_URL } from '../services/update-manager';
-import { LightChecker } from '../services/light-checker';
 import type { Settings } from '../types';
 
 let manager: UpdateManager | null = null;
-const lightChecker = new LightChecker();
-
-/**
- * id этого профиля браузера — публикуется в сквозной прогресс лёгкой проверки.
- * По нему popup отличает «идёт в другом профиле» от «мой SW упал, прогресс
- * протух» (иначе протухший running=true висел 5 минут и путал кнопку).
- */
-async function getLightInstanceId(): Promise<string> {
-  const stored = await chrome.storage.local.get('lightInstanceId');
-  if (stored.lightInstanceId) return stored.lightInstanceId;
-  const id = 'lc-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-  await chrome.storage.local.set({ lightInstanceId: id });
-  return id;
-}
-getLightInstanceId().then((id) => lightChecker.setInstanceId(id));
 
 /**
  * Запуск воркера. Вызывается и из popup (через onMessage), и из будильника.
@@ -123,41 +107,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { saved: true };
       }
 
-      case 'LIGHT_START': {
-        // Лёгкая проверка областей (без аккаунта). Защита от параллельного
-        // запуска в нескольких браузерах (расширение универсальное!):
-        // если проверка уже идёт в другом профиле — не стартуем вторую.
-        const local = lightChecker.getProgress();
-        if (local.running) return { error: 'уже работает в этом профиле' };
-        const remote = await LightChecker.fetchGlobal().catch(() => null);
-        const myId = await getLightInstanceId();
-        if (remote && remote.running && remote.instanceId && remote.instanceId !== myId) {
-          return { error: 'уже идёт в другом профиле — смотри прогресс здесь' };
-        }
-        // Флаг дежурного режима: по нему будильник поднимает проверку после
-        // гибели MV3-воркера (как autoStart у полного парсинга).
-        await chrome.storage.local.set({ lightCheckAuto: true });
-        lightChecker.start().catch(() => {});
-        return { started: true };
-      }
-
-      case 'LIGHT_STOP': {
-        await chrome.storage.local.set({ lightCheckAuto: false });
-        lightChecker.stop();
-        return { stopped: true };
-      }
-
-      case 'LIGHT_STATUS': {
-        const auto = await chrome.storage.local.get(['lightCheckAuto', 'lightInstanceId']);
-        const local = { ...lightChecker.getProgress(), auto: !!auto.lightCheckAuto };
-        if (local.running) return local;
-        // Проверка может идти в ДРУГОМ профиле — показываем глобальный статус.
-        // Свой же протухший прогресс (SW упал) НЕ считаем «другим профилем».
-        const remote = await LightChecker.fetchGlobal().catch(() => null);
-        const mine = remote?.instanceId && remote.instanceId === auto.lightInstanceId;
-        return remote && remote.running && !mine ? { ...remote, remote: true, auto: !!auto.lightCheckAuto } : local;
-      }
-
       default:
         return { error: 'Unknown message type' };
     }
@@ -197,22 +146,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         console.log('[Updater] Worker restarted by alarm');
       }
     }
-  }
-
-  // ── Лёгкая проверка: дежурный режим (lightCheckAuto) ──────────────────
-  // MV3 убивает SW — вместе с LightChecker'ом. Раньше проверка молча
-  // умирала и popup показывал «остановлен». Теперь: если пользователь
-  // запускал дежурную проверку (флаг в storage) — поднимаем её снова.
-  if (alarm.name === 'periodic-check') {
-    const lc = await chrome.storage.local.get(['lightCheckAuto', 'lightInstanceId']);
-    if (!lc.lightCheckAuto || lightChecker.getProgress().running) return;
-    // Не мешаем проверке из другого профиля (свой протухший прогресс — можно).
-    const remote = await LightChecker.fetchGlobal().catch(() => null);
-    if (remote && remote.running && remote.instanceId && remote.instanceId !== lc.lightInstanceId) {
-      return;
-    }
-    console.log('[LightChecker] Duty-restart by alarm');
-    lightChecker.start().catch(() => {});
   }
 });
 

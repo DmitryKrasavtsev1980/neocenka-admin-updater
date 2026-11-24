@@ -1,27 +1,36 @@
 /**
- * sw-eval.js — выполнить JS в контексте service worker расширения.
+ * sw-eval.js — выполнить JS в контексте service worker расширения (CDP) и напечатать результат.
+ *
+ * Зачем: apply-topology.js пишет настройки из топологии, а здесь — точечные
+ * правки настроек вручную (например, переключить профиль на другой слот).
  *
  * Использование (Windows PowerShell):
+ *   node sw-eval.js <port> "<js-выражение>"
  *   node sw-eval.js <port> -f <file.js>
- *
- * Найдёт SW расширения (по id) на CDP-порту профиля и выполнит выражение.
  */
-const fs = require('fs');
-const port = process.argv[2];
-const expr = fs.readFileSync(process.argv[4], 'utf8');
+const port = Number(process.argv[2]);
+const expr = process.argv[3] === '-f'
+  ? require('fs').readFileSync(process.argv[4], 'utf8')
+  : process.argv[3];
 const EXT_ID = 'bimpcjbiacocbkodnohpghgceobgoeil';
+
+if (!port || !expr) {
+  console.error('usage: node sw-eval.js <cdpPort> "<js>"|-f <file.js>');
+  process.exit(1);
+}
 
 function wsCallUrl(url, method, params) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url);
     const timer = setTimeout(() => {
       ws.close();
-      reject(new Error('timeout ' + method));
+      reject(new Error(`timeout ${method}`));
     }, 15000);
     ws.onopen = () => ws.send(JSON.stringify({ id: 1, method, params }));
     ws.onmessage = (ev) => {
-      clearTimeout(timer);
       const msg = JSON.parse(ev.data);
+      if (msg.id !== 1) return;
+      clearTimeout(timer);
       ws.close();
       if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
       else resolve(msg.result || {});
@@ -33,24 +42,20 @@ function wsCallUrl(url, method, params) {
   });
 }
 
-(async () => {
-  const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  const sw = tabs.find((t) => t.type === 'service_worker' && (t.url || '').includes(EXT_ID));
-  if (!sw) {
-    console.log('нет service worker на порту ' + port);
-    process.exit(2);
-  }
+async function main() {
+  const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  const sw = list.find((t) => t.type === 'service_worker' && (t.url || '').includes(EXT_ID));
+  if (!sw) throw new Error('нет service worker расширения');
   const r = await wsCallUrl(sw.webSocketDebuggerUrl, 'Runtime.evaluate', {
     expression: expr,
-    awaitPromise: true,
     returnByValue: true,
+    awaitPromise: true,
   });
-  if (r.exceptionDetails) {
-    console.log('EXCEPTION: ' + JSON.stringify(r.exceptionDetails.exception || r.exceptionDetails));
-    process.exit(3);
-  }
-  console.log(JSON.stringify(r.result && r.result.value));
-})().catch((e) => {
-  console.log('FAIL: ' + e.message);
-  process.exit(2);
+  const v = r.result?.value;
+  console.log(typeof v === 'string' ? v : JSON.stringify(v));
+}
+
+main().catch((e) => {
+  console.error('FAIL:', e.message);
+  process.exit(1);
 });

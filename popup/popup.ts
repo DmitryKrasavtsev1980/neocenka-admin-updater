@@ -397,7 +397,8 @@ chrome.runtime.onMessage.addListener((message) => {
     addLog(`Завершено: ${message.processed} обработано, ${message.matched} обновлено`, 'success');
   }
   if (message.type === 'LIGHT_PROGRESS') {
-    updateLight(message);
+    // Лёгкая проверка вынесена в отдельное расширение (dist-light):
+    // сообщения её прогрока здесь просто игнорируем.
   }
 });
 
@@ -408,80 +409,7 @@ send({ type: 'STATUS' }).then((stats) => {
 });
 loadForm();
 
-// --- Лёгкая проверка областей (LightChecker) ---
-
-const lightStartBtn = document.getElementById('lightStartBtn') as HTMLButtonElement;
-const lightStopBtn = document.getElementById('lightStopBtn') as HTMLButtonElement;
-const lightStage = document.getElementById('lightStage')!;
-const lightChecked = document.getElementById('lightChecked')!;
-const lightStats = document.getElementById('lightStats')!;
-
-function updateLight(p: {
-  running?: boolean;
-  stage?: string;
-  checked?: number;
-  total?: number;
-  sources?: Record<string, { checked: number; total: number }>;
-  closed?: number;
-  blocked?: number;
-  auto?: boolean;
-}) {
-  if (p.stage !== undefined) lightStage.textContent = p.stage;
-  // Прогресс по КАЖДОМУ источнику отдельно (avito/cian) — без путаницы.
-  const renderSrc = (key: string, labelId: string, barId: string) => {
-    const sp = p.sources?.[key];
-    const label = document.getElementById(labelId);
-    const bar = document.getElementById(barId);
-    if (!sp || !label) return;
-    label.textContent = `${sp.checked} из ${sp.total || '?'}`;
-    if (bar) {
-      bar.style.width = sp.total ? Math.min(100, Math.round((sp.checked / sp.total) * 100)) + '%' : '0%';
-    }
-  };
-  renderSrc('avito', 'lightAvito', 'lightBarAvito');
-  renderSrc('cian', 'lightCian', 'lightBarCian');
-  if (p.checked !== undefined) {
-    lightChecked.textContent = String(p.checked);
-  }
-  if (p.closed !== undefined || p.blocked !== undefined) {
-    lightStats.textContent = `${p.closed ?? 0} / ${p.blocked ?? 0}`;
-  }
-  const isRemote = (p as any).remote === true;
-  if (p.running !== undefined) {
-    // В другом профиле — только наблюдение, управление заблокировано.
-    lightStartBtn.disabled = p.running || isRemote;
-    // Стоп доступен и в паузе duty-режима (авто): иначе дежурную проверку
-    // нельзя выключить, пока SW не поднялся.
-    lightStopBtn.disabled = (!p.running && !p.auto) || isRemote;
-  }
-  if (isRemote && p.stage !== undefined) {
-    lightStage.textContent = p.stage + ' (другой профиль)';
-  }
-  // Дежурный режим: проверка включена, но SW перезапускается — чтобы кнопка
-  // «Проверить» не выглядела «отжатой» (раньше это путало: работает или нет).
-  if (!p.running && !isRemote && p.auto) {
-    lightStage.textContent = (p.stage && p.stage !== 'остановлен' ? p.stage : 'дежурный режим')
-      + ' — перезапуск…';
-  }
-}
-
-lightStartBtn.addEventListener('click', () => {
-  chrome.runtime.sendMessage({ type: 'LIGHT_START' }, () => {
-    addLog('Лёгкая проверка запущена', 'success');
-    updateLight({ running: true, stage: 'запуск...' });
-  });
-});
-
-lightStopBtn.addEventListener('click', () => {
-  chrome.runtime.sendMessage({ type: 'LIGHT_STOP' }, () => {
-    addLog('Лёгкая проверка остановлена', 'info');
-    updateLight({ running: false, stage: 'остановлен' });
-  });
-});
-
-// текущее состояние при открытии popup
-chrome.runtime.sendMessage({ type: 'LIGHT_STATUS' }, (p) => {
-  if (p) updateLight(p);
-});
+// Лёгкая проверка вынесена в отдельное расширение (dist-light) —
+// см. light/light-popup.ts: своё ядро, свой SW, свой popup.
 
 console.log('[Updater] Popup loaded');

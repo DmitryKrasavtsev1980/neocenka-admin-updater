@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Лёгкая проверка</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>⚡ Лёгкая проверка</h1>
+
+    <div class="status-bar" id="statusBar">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">Остановлен</span>
+    </div>
+
+    <div class="stats" id="stats">
+      <div class="stat">
+        <span class="stat-value" id="checked">0</span>
+        <span class="stat-label">Проверено</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value" id="closed">0</span>
+        <span class="stat-label">Снято</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value" id="repriced">0</span>
+        <span class="stat-label">В полный парсинг</span>
+      </div>
+    </div>
+
+    <div class="config-row"><span class="config-label">Avito</span><span id="lightAvito">0</span></div>
+    <div class="progress"><div class="progress-bar" id="lightBarAvito"></div></div>
+    <div class="config-row"><span class="config-label">CIAN</span><span id="lightCian">0</span></div>
+    <div class="progress"><div class="progress-bar" id="lightBarCian"></div></div>
+
+    <div class="config-row"><span class="config-label">Этап</span><span id="lightStage">остановлен</span></div>
+
+    <div class="buttons">
+      <button id="lightStartBtn" class="btn btn-primary">▶ Проверить</button>
+      <button id="lightStopBtn" class="btn btn-danger" disabled>⏹ Стоп</button>
+    </div>
+
+    <div class="section-title">Канал модема</div>
+    <div class="routing">
+      <div class="config-row"><span class="config-label">Профиль</span><span id="workerId">—</span></div>
+      <div class="config-row"><span class="config-label">Прокси</span><span id="proxyAddr">—</span></div>
+      <div id="slotChips"></div>
+    </div>
+    <div class="config-hint">Канал переключается кликом по плашке слота (на лету). Статус профиля и воркера — в мониторинге.</div>
+  </div>
+  <script src="light-popup.js"></script>
+</body>
+</html>

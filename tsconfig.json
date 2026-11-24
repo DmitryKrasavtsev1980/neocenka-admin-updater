@@ -19,7 +19,8 @@
     "./parsers/**/*.ts",
     "./utils/**/*.ts",
     "./background/**/*.ts",
-    "./popup/**/*.ts"
+    "./popup/**/*.ts",
+    "./light/**/*.ts"
   ],
   "exclude": ["node_modules"]
 }

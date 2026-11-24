@@ -1,0 +1,293 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  min-width: 320px;
+}
+
+.container {
+  padding: 16px;
+}
+
+h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #fff;
+}
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #16213e;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #666;
+}
+
+.status-dot.running {
+  background: #4CAF50;
+  animation: pulse 1.5s infinite;
+}
+
+.status-dot.error {
+  background: #f44336;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.stats {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.stat {
+  flex: 1;
+  text-align: center;
+  padding: 8px;
+  background: #16213e;
+  border-radius: 8px;
+}
+
+.stat-value {
+  display: block;
+  font-size: 20px;
+  font-weight: 700;
+  color: #4CAF50;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: #888;
+}
+
+.config-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+  padding: 8px 10px;
+  background: #16213e;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.config-row {
+  display: flex;
+  justify-content: space-between;
+  color: #ccc;
+}
+
+.config-row-wrap {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.config-row-wrap span:last-child {
+  text-align: right;
+  word-break: break-word;
+}
+
+.config-label {
+  color: #888;
+}
+
+.config-hint {
+  font-size: 10px;
+  color: #555;
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.btn {
+  flex: 1;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: #4CAF50;
+  color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #45a049;
+}
+
+.btn-danger {
+  background: #f44336;
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #d32f2f;
+}
+
+.log {
+  max-height: 150px;
+  overflow-y: auto;
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+  color: #888;
+  background: #0d1117;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.log-entry {
+  margin-bottom: 2px;
+}
+
+.log-entry.error {
+  color: #f44336;
+}
+
+.log-entry.success {
+  color: #4CAF50;
+}
+
+/* --- маршрутизация и настройки --- */
+
+.section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #888;
+  margin: 12px 0 6px;
+}
+
+.routing,
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: #16213e;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.route-chain {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: #4dd0e1;
+  background: #0d1117;
+  border-radius: 4px;
+  padding: 6px 8px;
+  word-break: break-word;
+}
+
+.settings select,
+.settings input {
+  background: #0d1117;
+  color: #e0e0e0;
+  border: 1px solid #2a2a4a;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 11px;
+  max-width: 170px;
+}
+
+.btn-secondary {
+  background: #3949ab;
+  color: #fff;
+  margin-top: 4px;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #303f9f;
+}
+
+.slot-chips {
+  display: flex;
+  gap: 6px;
+}
+
+.slot-chip {
+  flex: 1;
+  text-align: center;
+  padding: 6px 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  background: #0d1117;
+  border: 1px solid #2a2a4a;
+  color: #ccc;
+  cursor: pointer;
+}
+
+.slot-chip:hover {
+  border-color: #58a6ff;
+}
+
+.slot-chip.chip-active {
+  border-width: 2px;
+  border-color: #58a6ff;
+  background: #0d1a2e;
+}
+
+.slot-chip.chip-ok {
+  border-color: #4CAF50;
+}
+
+.slot-chip.chip-warn {
+  border-color: #ff9800;
+}
+
+.slot-chip.chip-down {
+  border-color: #f44336;
+}
+
+.slot-chip small {
+  color: #888;
+}
+
+
+/* полоса прогресса лёгкой проверки */
+.progress {
+  height: 8px;
+  background: #0d1117;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  width: 0;
+  background: #4CAF50;
+  border-radius: 4px;
+  transition: width 0.3s;
+}

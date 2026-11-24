@@ -825,7 +825,11 @@ export class UpdateManager {
         source: SOURCE_DOMAIN[this.settings.source],
         // stale_days=5 — как у серверного досыпа (update:enqueue-support) и
         // критерия viol_updated_5d: 3 дня заставляли долбить свежие карточки.
+        //
+        // kind=light: авто-досып идёт через Лёгкую проверку (статус/цена),
+        // полный парсинг получает только изменённые карточки (complete-light).
         filter_data: { update_all: true, mode: 'stale', stale_days: 5 },
+        kind: 'light',
       });
       if (!result?.task || !result.ads_found) {
         console.log('[Updater] Досыпать нечего (нет областей «В работе» или очередь актуальна)');

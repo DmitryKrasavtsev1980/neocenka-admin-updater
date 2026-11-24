@@ -10,6 +10,7 @@ import type {
   ClaimedAd,
   AdUpdateData,
   IpLockState,
+  LightResult,
   QueueStats,
   SourceDomain,
   UpdateTaskDto,
@@ -43,12 +44,14 @@ class ApiClient {
   /**
    * Создать задачу на обновление. Без saved_filter_id и filter_data —
    * складывает в очередь ВСЕ объявления (update_all).
+   * kind: 'full' (полный парсинг, дефолт) | 'light' (лёгкая проверка).
    */
   async createTask(params: {
     name?: string;
     source?: SourceDomain;
     filter_data?: Record<string, unknown>;
     saved_filter_id?: number;
+    kind?: 'full' | 'light';
   }): Promise<{ success: boolean; task: UpdateTaskDto; ads_found: number }> {
     return this.request('/update/tasks', {
       method: 'POST',
@@ -74,11 +77,15 @@ class ApiClient {
   /**
    * Взять порцию объявлений в аренду (10 минут).
    * source: 'avito.ru' | 'cian.ru'; null/'' — не фильтровать.
+   * kind: 'full' (полный парсинг, дефолт) | 'light' (лёгкая проверка) —
+   * воркеры берут работу только своего kind, клейм атомарный (N воркеров
+   * одного kind не дублируют карточки).
    */
   async claim(
     browserId: string,
     source: SourceDomain | null,
-    limit: number
+    limit: number,
+    kind: 'full' | 'light' = 'full'
   ): Promise<ClaimedAd[]> {
     const data = await this.request<{ data: ClaimedAd[] }>('/update/claim', {
       method: 'POST',
@@ -87,9 +94,34 @@ class ApiClient {
         browser_id: browserId,
         source: source ?? undefined,
         limit: Math.min(Math.max(limit, 1), 100),
+        kind,
       }),
     });
     return data.data || [];
+  }
+
+  /**
+   * Завершение строк ЛЁГКОЙ проверки (kind=light) батчем.
+   * Семантика как у lightcheck-report, но с жизненным циклом очереди:
+   * active → обновить, closed → закрыть, не определено → вернуть в очередь,
+   * изменение цены → сервер отдаёт карточку в полный парсинг сам.
+   */
+  async completeLight(
+    browserId: string,
+    results: LightResult[]
+  ): Promise<{
+    success: boolean;
+    active: number;
+    closed: number;
+    released: number;
+    changed_ids: number[];
+    full_task_id: number | null;
+  }> {
+    return this.request('/update/complete-light', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ browser_id: browserId, results }),
+    });
   }
 
   /**

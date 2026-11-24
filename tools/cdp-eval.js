@@ -33,11 +33,12 @@ function wsCallUrl(url, method, params) {
     const timer = setTimeout(() => {
       ws.close();
       reject(new Error('timeout ' + method));
-    }, 30000);
+    }, 60000);
     ws.onopen = () => ws.send(JSON.stringify({ id: 1, method, params }));
     ws.onmessage = (ev) => {
-      clearTimeout(timer);
       const msg = JSON.parse(ev.data);
+      if (msg.id !== 1) return; // событие CDP — не ответ команды, ждём дальше
+      clearTimeout(timer);
       ws.close();
       if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
       else resolve(msg.result || {});

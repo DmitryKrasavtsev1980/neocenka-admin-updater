@@ -97,6 +97,23 @@ export interface AdUpdateData {
   updated?: string;
 }
 
+/**
+ * Результат ЛЁГКОЙ проверки карточки (POST /api/update/complete-light).
+ * queue_id — строка очереди из claim(kind='light'); id — ad.id.
+ * status: 'active' | 'closed' | иное (не определено → вернётся в очередь).
+ */
+export interface LightResult {
+  queue_id: number;
+  id: number;
+  status: string;
+  price?: number | null;
+  updated?: string | null;
+  renovation_type?: string | null;
+  price_history?: PriceHistoryItem[] | null;
+  photos?: string[] | null;
+  error?: string;
+}
+
 // Задача на обновление (POST /api/update/tasks → task)
 export interface UpdateTaskDto {
   id: number;

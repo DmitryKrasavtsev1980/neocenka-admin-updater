@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Неоценка Light Check",
+  "version": "1.0.0",
+  "description": "Лёгкая проверка статусов объявлений (очередь kind=light)",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "alarms",
+    "storage",
+    "proxy"
+  ],
+  "host_permissions": [
+    "https://*.avito.ru/*",
+    "http://*.avito.ru/*",
+    "https://*.cian.ru/*",
+    "http://*.cian.ru/*",
+    "https://54.neocenka.ru/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "light/light-service-worker.js"
+  },
+  "action": {
+    "default_popup": "light/light-popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
