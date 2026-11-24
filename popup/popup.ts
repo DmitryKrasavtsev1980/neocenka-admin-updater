@@ -130,6 +130,37 @@ async function getProxyAddress(): Promise<string> {
   });
 }
 
+/**
+ * Переключить канал (proxy) этого Chrome на слот НА ЛЕТУ — без перезапуска
+ * Chrome (право "proxy" есть в manifest). Раньше proxy был намертво привязан
+ * флагом --proxy-server при старте профиля: кончился трафик на модеме — профиль
+ * мёртв до перезапуска. Теперь канал выбирается прямо здесь.
+ */
+async function applyProxy(slot: string): Promise<string | null> {
+  const meta = SLOT_META[slot];
+  const proxyApi = (chrome as any).proxy;
+  if (!meta || !proxyApi?.settings?.set) return null;
+  return new Promise((resolve) => {
+    proxyApi.settings.set(
+      {
+        value: {
+          mode: 'fixed_servers',
+          rules: { singleProxy: { host: '127.0.0.1', port: meta.proxyPort } },
+        },
+        scope: 'regular',
+      },
+      () => {
+        if ((chrome as any).runtime.lastError) {
+          addLog(`Ошибка смены канала: ${(chrome as any).runtime.lastError.message}`, 'error');
+          resolve(null);
+        } else {
+          resolve(`127.0.0.1:${meta.proxyPort}`);
+        }
+      }
+    );
+  });
+}
+
 interface HelperStatus {
   ok: boolean;
   slot?: string;
@@ -210,7 +241,7 @@ async function probeRouting() {
   await renderSlotChips();
 }
 
-/** Плашки слотов A/B/C: helper жив? интернет модема виден? */
+/** Плашки слотов A/B/C: helper жив? интернет модема виден? Клик — переключить канал. */
 async function renderSlotChips() {
   let html = '<div class="slot-chips">';
   for (const [slot, meta] of Object.entries(SLOT_META)) {
@@ -229,11 +260,24 @@ async function renderSlotChips() {
         label = 'жив, интернет не проверен';
       }
     }
-    html += `<div class="slot-chip ${cls}"><b>${slot}</b> ${meta.operator}<br><small>${label}</small></div>`;
+    const active = slot === selModem.value ? ' chip-active' : '';
+    html += `<div class="slot-chip ${cls}${active}" data-slot="${slot}" title="Клик — переключить канал на слот ${slot}"><b>${slot}</b> ${meta.operator}<br><small>${label}</small></div>`;
   }
   html += '</div>';
   const holder = document.getElementById('slotChips');
-  if (holder) holder.innerHTML = html;
+  if (holder) {
+    holder.innerHTML = html;
+    holder.querySelectorAll<HTMLElement>('.slot-chip[data-slot]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        const slot = el.dataset.slot!;
+        if (slot === selModem.value) return;
+        selModem.value = slot;
+        inpModemHost.value = deriveHelperUrl(slot);
+        addLog(`Переключаю канал на слот ${slot} (${SLOT_META[slot].operator})…`);
+        saveBtn.click(); // сохранить + переключить proxy + перезапуск воркера
+      });
+    });
+  }
 }
 
 // --- настройки ---
@@ -255,7 +299,7 @@ async function loadForm() {
   const proxyAddr = await getProxyAddress();
   const proxySlot = slotFromProxyAddress(proxyAddr);
   if (proxySlot && proxySlot !== selModem.value) {
-    addLog(`Внимание: proxy этого Chrome (${proxyAddr}) = слот ${proxySlot}, а в настройках — ${selModem.value}`, 'error');
+    addLog(`Канал ${proxySlot} (${proxyAddr}) ≠ выбранному слоту ${selModem.value} — нажми «Сохранить», переключится на лету`, 'info');
   }
   renderChain(proxyAddr, selModem.value, null);
   probeRouting();
@@ -267,13 +311,17 @@ saveBtn.addEventListener('click', async () => {
   const modemHost = inpModemHost.value.trim() || deriveHelperUrl(slot);
   inpModemHost.value = modemHost;
 
+  // Канал переключается на лету: proxy этого Chrome следует за выбранным слотом.
+  const switched = await applyProxy(slot);
+  if (switched) addLog(`Канал переключён: proxy ${switched}`, 'success');
+
   await send({
     type: 'SAVE_SETTINGS',
     settings: { source, modemSlot: slot, modemHost, sourcePinned: true, modemEnabled: true },
   });
   addLog(`Сохранено: ${source === 'cian' ? 'CIAN' : 'Avito'} × слот ${slot}`, 'success');
 
-  const proxyAddr = await getProxyAddress();
+  const proxyAddr = (await getProxyAddress()) || switched || '—';
   renderChain(proxyAddr, slot, null);
 
   // Настройки применяются к работающему воркеру сразу — перезапуск
@@ -306,6 +354,9 @@ probeBtn.addEventListener('click', () => {
 
 startBtn.addEventListener('click', async () => {
   const source = selSource.value === 'cian' ? 'cian' : 'avito';
+  // Гарантия канала: proxy этого Chrome всегда соответствует выбранному слоту.
+  const switched = await applyProxy(selModem.value);
+  if (switched) addLog(`Канал: proxy ${switched}`, 'success');
   const result = await send({ type: 'START', source });
   if (result?.error) {
     addLog(`Ошибка: ${result.error}`, 'error');
@@ -373,6 +424,7 @@ function updateLight(p: {
   sources?: Record<string, { checked: number; total: number }>;
   closed?: number;
   blocked?: number;
+  auto?: boolean;
 }) {
   if (p.stage !== undefined) lightStage.textContent = p.stage;
   // Прогресс по КАЖДОМУ источнику отдельно (avito/cian) — без путаницы.
@@ -398,10 +450,18 @@ function updateLight(p: {
   if (p.running !== undefined) {
     // В другом профиле — только наблюдение, управление заблокировано.
     lightStartBtn.disabled = p.running || isRemote;
-    lightStopBtn.disabled = !p.running || isRemote;
+    // Стоп доступен и в паузе duty-режима (авто): иначе дежурную проверку
+    // нельзя выключить, пока SW не поднялся.
+    lightStopBtn.disabled = (!p.running && !p.auto) || isRemote;
   }
   if (isRemote && p.stage !== undefined) {
     lightStage.textContent = p.stage + ' (другой профиль)';
+  }
+  // Дежурный режим: проверка включена, но SW перезапускается — чтобы кнопка
+  // «Проверить» не выглядела «отжатой» (раньше это путало: работает или нет).
+  if (!p.running && !isRemote && p.auto) {
+    lightStage.textContent = (p.stage && p.stage !== 'остановлен' ? p.stage : 'дежурный режим')
+      + ' — перезапуск…';
   }
 }
 

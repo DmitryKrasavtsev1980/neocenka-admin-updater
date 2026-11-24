@@ -27,6 +27,8 @@ export interface LightProgress {
   closed: number;
   repriced: number;
   source: string;
+  /** id профиля браузера (см. setInstanceId): свой протухший прогресс vs чужой. */
+  instanceId?: string;
 }
 
 const API_MONITOR = '/api/monitor';
@@ -37,6 +39,7 @@ export class LightChecker {
   private running = false;
   private stopFlag = false;
   private tabId: number | null = null;
+  private instanceId = '';
   private progress: LightProgress = {
     running: false, stage: 'остановлен', checked: 0, total: 0,
     sources: { avito: { checked: 0, total: 0 }, cian: { checked: 0, total: 0 } },
@@ -45,6 +48,16 @@ export class LightChecker {
   private onUpdate: ((p: LightProgress) => void) | null = null;
 
   constructor(private apiUrl: string = 'https://54.neocenka.ru') {}
+
+  /**
+   * id этого профиля браузера (генерируется service-worker'ом, живёт в
+   * chrome.storage.local). Публикуется в сквозной прогресс: по нему popup
+   * отличает «идёт в другом профиле» от «мой SW упал и прогресс протух».
+   */
+  setInstanceId(id: string) {
+    this.instanceId = id;
+    this.progress.instanceId = id;
+  }
 
   onProgress(cb: (p: LightProgress) => void) {
     this.onUpdate = cb;
@@ -64,6 +77,7 @@ export class LightChecker {
 
   private publish() {
     this.progress.running = this.running;
+    if (this.instanceId) this.progress.instanceId = this.instanceId;
     if (this.onUpdate) this.onUpdate(this.getProgress());
     chrome.runtime.sendMessage({ type: 'LIGHT_PROGRESS', ...this.getProgress() }).catch(() => {});
     // Сквозной статус на сервер: popup ЛЮБОГО профиля видит прогресс
@@ -72,6 +86,24 @@ export class LightChecker {
     if (now - this.lastPublishAt > 3000 || !this.progress.running) {
       this.lastPublishAt = now;
       this.apiPost(`${API_MONITOR}/lightcheck-progress`, { progress: this.getProgress() }).catch(() => {});
+    }
+  }
+
+  /**
+   * Длинная пауза дольными сердцебиениями вместо одного setTimeout.
+   *
+   * MV3 убивает service worker после ~30 с бездействия — тихий setTimeout
+   * на 5 минут убивал и LightChecker, и проверка «отжималась» (кнопка в
+   * popup снова показывала «остановлен»). Publish каждые 30 с держит SW
+   * живым (fetch сбрасывает таймер бездействия) и не даёт серверной
+   * stale-защите (5 мин) засчитать прогресс мёртвым.
+   */
+  private async sleep(ms: number) {
+    const step = 30_000;
+    const deadline = Date.now() + ms;
+    while (!this.stopFlag && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, Math.min(step, deadline - Date.now())));
+      if (!this.stopFlag) this.publish();
     }
   }
 
@@ -115,28 +147,33 @@ export class LightChecker {
     this.publish();
 
     try {
-      for (const src of sources) {
-        this.progress.source = src;
-        let processed = 0;
-        // ДЕЖУРНАЯ схема: проверяем «протухшие» карточки (фильтр по updated
-        // на сервере). Пул исчерпан — ждём час и опрашиваем снова: за час
-        // часть карточек перевалит за порог свежести и попадёт в проверку.
-        while (!this.stopFlag) {
+      // ДЕЖУРНАЯ схема: работаем, пока пользователь не нажал «Стоп».
+      // Пустой пул — это НЕ завершение: карточки «протухают» по мере
+      // обновления, новые появляются — ждём и опрашиваем снова (раньше
+      // пул пустовал → break → «проверка завершилась», и это путало:
+      // непонятно, подхватит ли расширение новые объявления).
+      while (!this.stopFlag) {
+        let gotAny = false;
+        for (const src of sources) {
+          if (this.stopFlag) break;
+          this.progress.source = src;
           const size = PORTION;
           const d = await this.apiGet(
             `${API_MONITOR}/lightcheck-urls?limit=${size}&source=${src}&stale_days=1`
           ).catch(() => null);
           const items: Array<{ id: number; url: string }> = d?.items || [];
+          this.progress.sources[src] = this.progress.sources[src] || { checked: 0, total: 0 };
           if (d?.total) {
-            this.progress.sources[src] = this.progress.sources[src] || { checked: 0, total: 0 };
             this.progress.sources[src].total = d.total;
             this.progress.total = Object.values(this.progress.sources)
               .reduce((a, sp) => a + (sp.total || 0), 0);
           }
           if (!items.length) {
-            this.progress.stage = `${src}: пул пройден`;
-            break;
+            this.progress.stage = `${src}: жду новые карточки…`;
+            this.publish();
+            continue;
           }
+          gotAny = true;
           this.progress.stage = `${src}: проверяю порцию ${items.length}...`;
           this.publish();
 
@@ -144,7 +181,6 @@ export class LightChecker {
           // Обратная запись СРАЗУ — сервер знает свежесть каждой карточки.
           await this.report(rows);
           this.tally(rows);
-          processed += rows.length;
           this.progress.stage = `${src}: проверено ${this.progress.checked}`;
           this.publish();
 
@@ -153,17 +189,57 @@ export class LightChecker {
           if (streak >= 3) {
             this.progress.stage = 'плотный блок — пауза 2 мин';
             this.publish();
-            await new Promise((r) => setTimeout(r, 120000));
+            await this.sleep(120000);
           }
+        }
+        if (!gotAny && !this.stopFlag) {
+          // Оба пула пусты — тихое ожидание с опросом каждые 5 минут,
+          // статус «работает» не снимается (кнопка «Запустить» остаётся
+          // заблокированной, пока пользователь не нажмёт «Стоп»).
+          this.progress.stage = 'ожидание новых карточек…';
+          this.publish();
+          await this.sleep(5 * 60 * 1000);
         }
       }
     } catch (e: any) {
       this.progress.stage = 'ошибка: ' + (e?.message || e);
     }
     this.running = false;
-    this.progress.stage += ' — завершено';
+    this.progress.stage = 'остановлено';
     this.publish();
+    await this.closeTab();
     return { ok: true, ...this.progress };
+  }
+
+  /**
+   * Вкладка карточки живёт между перезапусками SW: tabId храним в
+   * chrome.storage.local, при старте переиспользуем живую вкладку (иначе
+   * каждый duty-restart плодил бы новую), при завершении — закрываем.
+   */
+  private async openTab(url: string): Promise<number> {
+    if (this.tabId != null) return this.tabId;
+    const stored = await chrome.storage.local.get('lightTabId');
+    const saved = stored.lightTabId as number | undefined;
+    if (saved != null) {
+      try {
+        await chrome.tabs.get(saved);
+        this.tabId = saved;
+        return saved;
+      } catch { /* вкладка закрыта — создадим новую */ }
+    }
+    const t = await chrome.tabs.create({ url, active: false });
+    this.tabId = t.id!;
+    await chrome.storage.local.set({ lightTabId: t.id });
+    return t.id!;
+  }
+
+  private async closeTab() {
+    const id = this.tabId;
+    this.tabId = null;
+    await chrome.storage.local.remove('lightTabId').catch(() => {});
+    if (id != null) {
+      await chrome.tabs.remove(id).catch(() => {});
+    }
   }
 
   private tally(_rows: Array<{ status: string }>) {
@@ -173,18 +249,15 @@ export class LightChecker {
   /** Порция: открыть каждую карточку в рабочей вкладке и вытащить данные. */
   private async checkPortion(items: Array<{ id: number; url: string }>) {
     const rows: Array<{ id: number; url: string } & CardExtract> = [];
-    if (!this.tabId) {
-      const t = await chrome.tabs.create({ url: items[0].url, active: false });
-      this.tabId = t.id!;
-    }
+    const tabId = await this.openTab(items[0].url);
     for (const it of items) {
       if (this.stopFlag) break;
       try {
-        await chrome.tabs.update(this.tabId, { url: it.url });
-        await this.waitLoad(this.tabId);
+        await chrome.tabs.update(tabId, { url: it.url });
+        await this.waitLoad(tabId);
         await new Promise((r) => setTimeout(r, 1500));
         const res = await chrome.scripting.executeScript({
-          target: { tabId: this.tabId },
+          target: { tabId },
           func: extractCard,
         });
         const data: CardExtract = res?.[0]?.result || { status: 'unknown', price: null, date: null, updated: null, renovation: null, photos: [], history: [] };
